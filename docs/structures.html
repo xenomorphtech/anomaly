@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Commander — World Structures</title>
+<style>
+  :root {
+    --bg: #070b08; --panel: #0d130e; --panel2: #111a13;
+    --line: #1d2b20; --line-hi: #3a5540;
+    --txt: #c8d6c9; --dim: #6e8272; --faint: #44543f;
+    --green: #7dff9a; --amber: #e8b241; --red: #ff5c5c; --cyan: #6fd8ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--txt);
+    font: 15px/1.6 "JetBrains Mono", "Fira Mono", ui-monospace, monospace;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 40px 24px 80px; }
+  h1 { color: var(--green); font-size: 26px; letter-spacing: 1px; margin: 0 0 4px; }
+  .sub { color: var(--dim); font-size: 12.5px; margin-bottom: 36px; }
+  h2 {
+    color: var(--green); font-size: 15px; letter-spacing: 2px; text-transform: uppercase;
+    border-bottom: 1px solid var(--line-hi); padding-bottom: 6px; margin: 44px 0 14px;
+  }
+  p { margin: 10px 0; }
+  a { color: var(--green); }
+  code {
+    background: var(--panel2); border: 1px solid var(--line);
+    padding: 1px 5px; border-radius: 3px; font-size: 13px; color: var(--txt);
+  }
+  pre {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+    padding: 14px 16px; overflow-x: auto; font-size: 13px; line-height: 1.5;
+  }
+  pre code { background: none; border: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; margin: 12px 0; }
+  th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--panel2); color: var(--green); font-weight: normal; letter-spacing: 1px; font-size: 11.5px; text-transform: uppercase; }
+  .callout {
+    border: 1px solid var(--line-hi); border-left: 3px solid var(--green);
+    background: var(--panel); padding: 10px 14px; border-radius: 3px; margin: 14px 0; font-size: 13.5px;
+  }
+  .cy { color: var(--cyan); } .am { color: var(--amber); }
+  .gr { color: var(--green); } .rd { color: var(--red); } .d { color: var(--dim); }
+  img.shot { max-width: 100%; border: 1px solid var(--line-hi); border-radius: 4px; margin: 10px 0; }
+  figure { margin: 14px 0; }
+  figcaption { color: var(--dim); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>◆ WORLD STRUCTURES</h1>
+<div class="sub">commander — RTS context HQ · docs/structures.html · updated 2026-08-27</div>
+
+<p>
+Bases are theaters; work lives around them as vector-drawn structures on the map. Every structure
+<b>belongs to a base</b>, is placed while that base is selected, persists in <code>space.jsonl</code>,
+and can be created and driven by <a href="wasm-modules.html">wasm programs</a> and the control API
+as well as by hand. Two structure types exist today:
+</p>
+
+<figure>
+<img class="shot" src="structures.png" alt="pylons and sensor arrays around a base">
+<figcaption>A done pylon (green), a resolved sensor array (quiet, ✓), a todo pylon (grey, unpowered),
+and an open amber question mid-scan next to a placement marker.</figcaption>
+</figure>
+
+<h2>◆ Pylons — goals &amp; tasks</h2>
+<p>
+A pylon is a floating crystal over a ground plate — one pylon per task/goal of its base. The task's
+state is its power level:
+</p>
+<table>
+<tr><th>state</th><th>look</th></tr>
+<tr><td><code>todo</code></td><td><span class="d">unpowered grey-blue crystal, slow hover, no field</span></td></tr>
+<tr><td><code>doing</code></td><td><span class="cy">bright cyan, fast bob, glow, pulsing power-field ring on the ground</span></td></tr>
+<tr><td><code>done</code></td><td><span class="gr">calm green, quiet — the goal stands</span></td></tr>
+<tr><td><code>blocked</code></td><td><span class="rd">red crystal with a flickering alarm ring</span></td></tr>
+</table>
+<p>
+Pylons are the same data as the card's task list (<code>Task</code> in <code>src/model.rs</code>,
+now with an optional world <code>pos</code>) — a task upserted by a wasm reducer materializes as a
+pylon in an auto slot on the arc under its base; placed or dragged pylons keep their exact spot.
+</p>
+
+<h2>⌖ Sensor arrays — questions &amp; research</h2>
+<p>
+A sensor array is a mast with a dish and a sweeping radar beam — one array per open question or
+research thread of its base. While the question is <b>open</b> it scans: amber, rotating beam,
+expanding ping rings, a bobbing <code>?</code> above the dish. Once <b>resolved</b> it goes quiet
+and green with a <code>✓</code>. Questions live in <code>Project.questions</code>
+(<code>Question { text, resolved, pos }</code>) and also appear as a list on the base card,
+where clicking a row toggles resolved.
+</p>
+
+<h2>Controls</h2>
+<p>
+Building is a grouped command card, StarCraft-style: <code>B</code> arms the <b>build submenu</b> and
+the bottom hint bar switches down to its level —
+<span class="gr">▸ BUILD · [b] base · [p] pylon — goal · [q] sensor — question · [esc] cancel</span> —
+then the second key places at the cursor.
+</p>
+<table>
+<tr><th>action</th><th>how</th></tr>
+<tr><td>build anything</td><td><code>B</code> to open the build menu, then <code>B</code> = base, <code>P</code> = pylon, <code>Q</code> = sensor array; type the name/goal/question, Enter</td></tr>
+<tr><td>select a structure</td><td><b>click</b> the pylon or sensor array — pulsing selection brackets; click empty ground or <code>esc</code> deselects</td></tr>
+<tr><td>change its state</td><td><b>double-click</b> into its space and use the state chips (<code>TODO/DOING/DONE/BLOCKED</code>, or <code>SCANNING/RESOLVED</code>); question rows on the base card also toggle on click</td></tr>
+<tr><td>enter a structure's space</td><td><b>double-click</b> the pylon or sensor array — its own interior room: the structure monumental in state color, clickable state chips, and the slice of the event feed that mentions it. <code>esc</code> or double-click the floor exits</td></tr>
+<tr><td>reposition</td><td>drag the structure; the spot persists</td></tr>
+<tr><td>group select</td><td><b>ctrl+drag</b> a rectangle — every pylon/sensor it touches gets pulsing selection brackets and a count readout; click empty ground or <code>esc</code> clears</td></tr>
+<tr><td>demolish structures</td><td>with a group selected, <code>D</code> <code>D</code> (press twice within 4s) removes them all, logged per structure in the event feed. With no group, <code>D</code> <code>D</code> still destroys the selected base</td></tr>
+<tr><td>size ratio</td><td>the <b>◆ SIZE ×</b> slider in the top bar (0.6–3.0, default 1.5) scales all substructures relative to the map; persisted with the space, also settable via <code>/cfg?struct_scale=1.5</code></td></tr>
+<tr><td>labels</td><td>shown when the parent base is selected, or always when zoomed in (scale ≥ 0.75)</td></tr>
+</table>
+<p class="d">Pylons and sensor arrays still need a selected base to be placed — the structure belongs to it.
+A single click never mutates: it only selects (dd then demolishes; double-click enters).
+Substructures always win the click hit-test over base cards and captures, and their click zones cover
+crystal, mast, and ground plate.</p>
+<p class="d">Every placement, state change, and resolution is logged into the base's event feed
+(and therefore its "since you left" delta).</p>
+<h2>Title vs brief</h2>
+<p class="d">A structure's <b>title</b> is only its name — the short visual cue drawn on the map next to the crystal
+or mast. What the pylon or question actually <em>is</em> lives in its <b>brief</b>: a free-form text surface inside
+the structure's room (double-click the structure to enter). Click the panel (or press enter inside the room) to edit; it saves as you type
+(<code>notes</code> in <code>space.jsonl</code>, omitted while empty). Hotkeys are muted while the editor has focus;
+esc leaves the editor first, then the room. A dispatched worker receives the pylon's brief as its
+"Assignment brief" alongside the title.</p>
+<p class="d"><b>Clipboard.</b> ctrl+v pastes from the <em>host</em> X11 clipboard and ctrl+c / ctrl+x copy into it,
+even though the app runs inside a nested weston whose own wayland clipboard is isolated from the host session
+(eframe only ever talks to that inner clipboard, so paste used to land nothing). The app connects to
+<code>DISPLAY</code>, or <code>COMMANDER_HOST_DISPLAY</code> when the launcher strips it, defaulting to <code>:0</code>;
+if the host display is unreachable it falls back to the compositor clipboard.</p>
+
+<h2>Control API</h2>
+<pre><code># upsert a goal pylon on base 0 (auto slot unless x/y given)
+curl "localhost:7700/pylon?i=0&amp;title=ship+wasm+docs&amp;state=doing&amp;x=5200&amp;y=3060"
+
+# set (or replace) its brief — the body behind the short title
+curl "localhost:7700/pylon?i=0&amp;title=ship+wasm+docs&amp;state=doing&amp;notes=cover+the+ABI+table+and+budgets"
+
+# upsert a question sensor array
+curl "localhost:7700/question?i=0&amp;text=which+runtime+for+gpu+tasks%3F"
+
+# resolve it later
+curl "localhost:7700/question?i=0&amp;text=which+runtime+for+gpu+tasks%3F&amp;resolved=1"
+
+# questions take a brief too (notes=..); reducer ops task/question accept "notes" as well
+
+# headless editing of a brief: enter the room, focus the editor, type / paste
+curl "localhost:7700/key?k=Enter"; curl "localhost:7700/text?s=hello"
+curl "localhost:7700/key?k=V&amp;ctrl=1"      # paste the host clipboard (ctrl=1 = ctrl chord; A/C/X work too)
+
+# observe: tasks and questions with world positions
+curl localhost:7700/state | jq '.projects[0] | {tasks, questions}'</code></pre>
+
+<h2>From wasm programs</h2>
+<p>
+Modules drive structures through <a href="wasm-modules.html#reducers">reducer commands</a>:
+<code>task</code> / <code>task_remove</code> for pylons and <code>question</code> /
+<code>question_remove</code> for sensor arrays, each accepting optional <code>x</code>/<code>y</code>
+world coordinates. A monitoring module can raise a red blocked pylon when a probe fails, flip it
+green when the endpoint recovers, or open a question when it sees something it cannot classify.
+</p>
+<div class="callout">
+The division of labor: <b>pylons</b> say <i>what we are building</i>, <b>sensor arrays</b> say
+<i>what we still need to find out</i> — glanceable from orbit by silhouette and color alone.
+</div>
+
+</div>
+</body>
+</html>

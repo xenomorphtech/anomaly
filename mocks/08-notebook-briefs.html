@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notebook Briefs — living documents</title>
+<style>
+  :root{
+    --bg:#1c1917; --bg2:#211d1a; --panel:#262220; --panel2:#2c2724;
+    --ink:#e9e2d6; --ink-dim:#a89f90; --ink-faint:#6f675b;
+    --line:#38322c; --accent:#d9a45b; --accent-dim:#8a6a3e;
+    --green:#8fbf7f; --green-bg:rgba(120,180,100,.13);
+    --red:#d98b7a; --blue:#8fb6cf; --purple:#b58ee0;
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  *{box-sizing:border-box; margin:0; padding:0}
+  html,body{height:100%}
+  body{background:var(--bg); color:var(--ink); font-family:var(--serif); overflow:hidden}
+  button{font-family:var(--sans); cursor:pointer}
+
+  /* ---------- top bar ---------- */
+  .topbar{position:fixed; inset:0 0 auto 0; height:46px; display:flex; align-items:center; gap:14px;
+    padding:0 16px; background:rgba(28,25,23,.92); backdrop-filter:blur(6px);
+    border-bottom:1px solid var(--line); z-index:40; font-family:var(--sans)}
+  .brand{display:flex; align-items:baseline; gap:10px; min-width:0}
+  .brand b{font-size:14px; letter-spacing:.02em; color:var(--accent); white-space:nowrap}
+  .brand span{font-size:12px; color:var(--ink-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .topbar .spacer{flex:1}
+  .tbtn{background:none; border:1px solid var(--line); color:var(--ink-dim); border-radius:6px;
+    font-size:12px; padding:5px 10px; transition:all .15s}
+  .tbtn:hover{color:var(--ink); border-color:var(--accent-dim); background:var(--panel)}
+  .tbtn.primary{color:#1c1917; background:var(--accent); border-color:var(--accent); font-weight:600}
+  .tbtn.primary:hover{filter:brightness(1.08)}
+  a.backlink{font-size:12px; color:var(--ink-faint); text-decoration:none}
+  a.backlink:hover{color:var(--ink-dim); text-decoration:underline}
+
+  /* ---------- layout ---------- */
+  .app{display:flex; height:100%; padding-top:46px}
+  .sidebar{width:252px; flex-shrink:0; background:var(--bg2); border-right:1px solid var(--line);
+    padding:18px 10px; overflow-y:auto; font-family:var(--sans)}
+  .side-h{font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-faint);
+    padding:4px 10px 6px}
+  .doc-item{display:flex; align-items:center; gap:9px; padding:7px 10px; border-radius:7px;
+    font-size:13.5px; color:var(--ink-dim); cursor:pointer; transition:background .12s, color .12s;
+    position:relative; margin-bottom:1px}
+  .doc-item:hover{background:var(--panel); color:var(--ink)}
+  .doc-item.active{background:var(--panel2); color:var(--ink)}
+  .doc-item .dot{width:8px; height:8px; border-radius:50%; flex-shrink:0}
+  .doc-item .nm{flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .doc-item .meta{font-size:10.5px; color:var(--ink-faint)}
+  .doc-item .badge{font-size:10px; background:var(--accent); color:#1c1917; border-radius:9px;
+    padding:1px 6px; font-weight:700}
+  .doc-item.pulse{animation:sidepulse 1.6s ease-out}
+  @keyframes sidepulse{0%{background:rgba(217,164,91,.28)} 100%{background:transparent}}
+  .side-note{margin-top:22px; padding:10px 10px 0; border-top:1px solid var(--line);
+    font-size:11px; color:var(--ink-faint); line-height:1.6}
+  kbd{font-family:var(--mono); font-size:10px; background:var(--panel2); border:1px solid var(--line);
+    border-bottom-width:2px; border-radius:4px; padding:1px 5px; color:var(--ink-dim)}
+
+  /* ---------- document ---------- */
+  .main{flex:1; overflow-y:auto; scroll-behavior:smooth}
+  .doc{max-width:680px; margin:0 auto; padding:52px 40px 140px; line-height:1.65; font-size:16.5px}
+  .doc h1{font-size:31px; font-weight:600; letter-spacing:-.01em; margin-bottom:6px}
+  .doc .doc-sub{font-family:var(--sans); font-size:13px; color:var(--ink-dim); margin-bottom:34px;
+    display:flex; gap:10px; align-items:center; flex-wrap:wrap}
+  .status-chip{font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; font-weight:600;
+    padding:2px 8px; border-radius:10px; border:1px solid}
+  .doc h2{font-family:var(--sans); font-size:12px; letter-spacing:.16em; text-transform:uppercase;
+    color:var(--ink-faint); font-weight:600; margin:40px 0 14px; padding-bottom:7px;
+    border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:10px}
+  .doc h2 .upd{font-size:10px; letter-spacing:.03em; text-transform:none; color:var(--green);
+    font-weight:500; opacity:0; transition:opacity .5s}
+  .doc h2 .upd.show{opacity:1}
+  .doc p{margin-bottom:12px; color:var(--ink)}
+  .doc p.dim{color:var(--ink-dim)}
+  .summary-block{border-radius:8px; padding:2px 14px; margin:0 -14px; transition:background .4s}
+  .summary-block.ripple{animation:ripple 2.4s ease-out}
+  @keyframes ripple{0%{background:var(--green-bg); box-shadow:0 0 0 1px rgba(143,191,127,.35)}
+    100%{background:transparent; box-shadow:none}}
+  .sentence-new{background:var(--green-bg); border-radius:3px; padding:0 2px}
+
+  ul.goals{list-style:none; margin-bottom:8px}
+  ul.goals li{padding:3px 0 3px 26px; position:relative}
+  ul.goals li::before{content:"◆"; position:absolute; left:4px; font-size:10px; top:9px; color:var(--accent-dim)}
+
+  .work-row{display:flex; align-items:baseline; gap:12px; padding:7px 2px; border-bottom:1px dashed var(--line);
+    font-size:15px}
+  .work-row:last-child{border-bottom:none}
+  .work-row .who{font-family:var(--mono); font-size:13px; color:var(--accent); min-width:118px}
+  .work-row .what{flex:1; color:var(--ink)}
+  .work-row .st{font-family:var(--sans); font-size:10.5px; letter-spacing:.06em; text-transform:uppercase;
+    font-weight:600; padding:1px 7px; border-radius:8px}
+  .st.working{color:var(--green); background:rgba(143,191,127,.12)}
+  .st.blocked{color:var(--red); background:rgba(217,139,122,.12)}
+  .st.idle{color:var(--ink-faint); background:rgba(255,255,255,.05)}
+  .st.ready{color:var(--blue); background:rgba(143,182,207,.12)}
+  .task-row{display:flex; gap:11px; padding:5px 2px; align-items:baseline; font-size:15.5px}
+  .task-row .box{font-family:var(--mono); font-size:13px; width:20px; flex-shrink:0}
+  .task-row.done{color:var(--ink-faint); text-decoration:line-through}
+  .task-row.blockedt .box{color:var(--red)}
+  .task-row.doing .box{color:var(--accent)}
+
+  /* ---------- decision callout ---------- */
+  .callout{margin:34px -18px; border:1px solid var(--accent-dim); border-left:4px solid var(--accent);
+    background:linear-gradient(180deg, rgba(217,164,91,.07), rgba(217,164,91,.03));
+    border-radius:8px; padding:16px 20px; cursor:pointer; transition:background .2s, border-color .2s}
+  .callout:hover{background:rgba(217,164,91,.11)}
+  .callout .co-head{display:flex; align-items:center; gap:10px; font-family:var(--sans)}
+  .callout .flag{font-size:15px}
+  .callout .co-title{font-weight:600; font-size:15px; flex:1}
+  .callout .co-due{font-size:11px; color:var(--accent); border:1px solid var(--accent-dim);
+    padding:1px 8px; border-radius:10px}
+  .callout .co-sub{font-family:var(--sans); font-size:12.5px; color:var(--ink-dim); margin-top:6px}
+  .callout.resolved{border-color:#4c6b45; border-left-color:var(--green); cursor:default;
+    background:linear-gradient(180deg, rgba(120,180,100,.08), rgba(120,180,100,.03))}
+  .callout.resolved:hover{background:rgba(120,180,100,.08)}
+
+  .memo{max-height:0; overflow:hidden; transition:max-height .6s cubic-bezier(.4,0,.2,1)}
+  .memo.open{max-height:1400px}
+  .memo-inner{padding:18px 4px 6px; border-top:1px dashed var(--accent-dim); margin-top:16px}
+  .memo-inner .memo-lede{font-style:italic; color:var(--ink-dim); font-size:14.5px; margin-bottom:16px;
+    font-family:var(--serif)}
+  .memo-entry{display:flex; gap:14px; padding:6px 0; font-size:14.5px; line-height:1.55}
+  .memo-entry .ts{font-family:var(--mono); font-size:11px; color:var(--ink-faint); min-width:86px;
+    padding-top:4px; text-align:right}
+  .memo-entry .tx{flex:1; color:var(--ink)}
+  .memo-entry.key .tx{color:var(--accent)}
+  .memo-entry.concl .tx{font-weight:600}
+  .options{display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:18px; font-family:var(--sans)}
+  .opt{border:1px solid var(--line); border-radius:8px; padding:13px 14px; background:var(--panel);
+    display:flex; flex-direction:column; gap:10px}
+  .opt .opt-t{font-size:13px; line-height:1.5; color:var(--ink)}
+  .opt button{align-self:flex-start; background:var(--accent); color:#1c1917; border:none; border-radius:6px;
+    font-size:12px; font-weight:700; padding:6px 12px; transition:filter .15s}
+  .opt button:hover{filter:brightness(1.1)}
+
+  /* ---------- log ---------- */
+  .log-entry{display:flex; gap:14px; padding:9px 10px; margin:0 -10px; border-radius:6px; font-size:14.5px;
+    line-height:1.55; border-bottom:1px solid var(--line)}
+  .log-entry .ts{font-family:var(--mono); font-size:11px; color:var(--ink-faint); min-width:52px; padding-top:4px}
+  .log-entry .agent{font-family:var(--mono); font-size:12px; color:var(--accent)}
+  .log-entry .tx{flex:1}
+  .log-entry.ins{background:var(--green-bg); border-left:3px solid var(--green); padding-left:10px;
+    animation:insin .6s ease-out}
+  .log-entry.ins .ts{color:var(--green)}
+  @keyframes insin{0%{opacity:0; transform:translateY(8px)} 100%{opacity:1; transform:none}}
+  .log-entry.kind-blocked .tx{color:var(--red)}
+  .log-entry.kind-capture .tx{color:var(--ink-dim); font-style:italic}
+  .log-entry.kind-decision .tx{color:var(--green); font-weight:600}
+
+  /* ---------- capture bar ---------- */
+  .capture-wrap{position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(120px);
+    width:min(560px, 90vw); z-index:60; transition:transform .3s cubic-bezier(.3,1.2,.4,1); opacity:0}
+  .capture-wrap.open{transform:translateX(-50%) translateY(0); opacity:1}
+  .capture-box{display:flex; align-items:center; gap:10px; background:var(--panel2); border:1px solid var(--accent-dim);
+    border-radius:12px; padding:12px 16px; box-shadow:0 16px 44px rgba(0,0,0,.55)}
+  .capture-box .pen{font-size:16px}
+  .capture-box input{flex:1; background:none; border:none; outline:none; color:var(--ink);
+    font-family:var(--serif); font-size:16px}
+  .capture-box input::placeholder{color:var(--ink-faint); font-style:italic}
+  .capture-box .hint{font-family:var(--sans); font-size:10.5px; color:var(--ink-faint); white-space:nowrap}
+
+  /* ---------- toast ---------- */
+  .toast{position:fixed; right:20px; bottom:22px; z-index:70; background:var(--panel2); border:1px solid var(--line);
+    border-left:3px solid var(--green); border-radius:8px; padding:10px 14px; font-family:var(--sans);
+    font-size:12.5px; color:var(--ink); box-shadow:0 10px 30px rgba(0,0,0,.5);
+    transform:translateY(90px); opacity:0; transition:all .3s}
+  .toast.show{transform:none; opacity:1}
+  .toast .t-sub{font-size:11px; color:var(--ink-dim); margin-top:2px}
+
+  /* ---------- overlays: workflows + compare ---------- */
+  .panel-pop{position:fixed; top:54px; right:14px; width:320px; z-index:55; background:var(--panel2);
+    border:1px solid var(--line); border-radius:10px; padding:16px 18px; font-family:var(--sans);
+    font-size:12.5px; line-height:1.6; color:var(--ink-dim); box-shadow:0 18px 50px rgba(0,0,0,.55);
+    display:none}
+  .panel-pop.open{display:block}
+  .panel-pop h3{font-size:12px; letter-spacing:.1em; text-transform:uppercase; color:var(--accent); margin-bottom:10px}
+  .panel-pop ol{padding-left:18px; display:flex; flex-direction:column; gap:8px}
+  .panel-pop b{color:var(--ink)}
+  .panel-pop .sw{display:grid; grid-template-columns:1fr 1fr; gap:14px}
+  .panel-pop .sw h4{font-size:11px; margin-bottom:6px}
+  .panel-pop .sw ul{padding-left:15px}
+  .panel-pop .sw li{margin-bottom:5px}
+  .good{color:var(--green)} .bad{color:var(--red)}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">
+    <b>▤ Notebook Briefs</b>
+    <span>every project is a living document you re-read, not a dashboard you decode</span>
+  </div>
+  <div class="spacer"></div>
+  <button class="tbtn primary" id="btnCapture" title="press c">✎ Capture <kbd style="border-color:rgba(0,0,0,.3);background:rgba(0,0,0,.15);color:#1c1917">c</kbd></button>
+  <button class="tbtn" id="btnReport">▶ simulate agent report</button>
+  <button class="tbtn" id="btnFlows">Try the workflows</button>
+  <button class="tbtn" id="btnCompare">ⓘ compare</button>
+  <a class="backlink" href="index.html">← all mocks</a>
+</div>
+
+<div class="panel-pop" id="flowsPanel">
+  <h3>Try the workflows</h3>
+  <ol>
+    <li><b>Capture</b> — press <kbd>c</kbd> or the ✎ Capture button, type a thought, hit Enter. It lands in the <b>Inbox scratchpad</b> doc (left sidebar) with no filing required.</li>
+    <li><b>Agent report</b> — click <b>▶ simulate agent report</b> (or wait ~8s). A green diff-styled entry appends to the Albion brief's Log, and its “State of the world” ripples to show it was rewritten.</li>
+    <li><b>Orient &amp; decide</b> — open the <b>Albion Automation</b> brief and click the amber ⚑ decision callout. It expands into a decision memo; read the trail, then commit one of the two options.</li>
+  </ol>
+</div>
+
+<div class="panel-pop" id="comparePanel">
+  <h3>Paradigm trade-offs</h3>
+  <div class="sw">
+    <div><h4 class="good">Strengths</h4><ul>
+      <li>Re-reading a maintained summary is the fastest way to reload context after days away.</li>
+      <li>Agent output lands as prose in the same place you think — no separate ops console.</li>
+      <li>Decisions live inside their narrative, so the “why” never detaches from the “what”.</li>
+    </ul></div>
+    <div><h4 class="bad">Weaknesses</h4><ul>
+      <li>Summaries rot unless something (you or an agent) actually rewrites them.</li>
+      <li>Poor at cross-project glanceability — one doc visible at a time.</li>
+      <li>Long logs get heavy; needs periodic gardening/compaction.</li>
+    </ul></div>
+  </div>
+</div>
+
+<div class="app">
+  <nav class="sidebar" id="sidebar"></nav>
+  <main class="main" id="main"><article class="doc" id="doc"></article></main>
+</div>
+
+<div class="capture-wrap" id="captureWrap">
+  <div class="capture-box">
+    <span class="pen">✎</span>
+    <input id="captureInput" placeholder="Jot it down — filing is optional, forever…" maxlength="200">
+    <span class="hint">↵ save · esc dismiss</span>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const WORLD = {
+  now: "2026-08-22T14:30:00",
+  projects: [
+    { id: "albion", name: "Albion Automation", color: "#e0a458",
+      status: "active", goal: "Fully autonomous gathering + market loop",
+      agents: [
+        { id: "packet-tracer", name: "packet-tracer", state: "working",
+          task: "Instrument gate transition packets", lastReport: "12:41" },
+        { id: "navigator", name: "navigator", state: "blocked",
+          task: "Cross-map routing through gates", lastReport: "11:58",
+          blockedOn: "decision-gate-desync" },
+        { id: "market-bot", name: "market-bot", state: "idle",
+          task: "Waiting on price feed refactor", lastReport: "09:12" }
+      ],
+      tasks: [
+        { t: "Fix gate desync", state: "blocked" },
+        { t: "Price feed refactor", state: "todo" },
+        { t: "Resource route optimizer", state: "done" }
+      ]},
+    { id: "homelab", name: "Homelab Migration", color: "#6fb3d2",
+      status: "active", goal: "Move all services from old NUC to Proxmox cluster",
+      agents: [
+        { id: "infra-agent", name: "infra-agent", state: "working",
+          task: "Migrating Postgres volumes to new ZFS pool", lastReport: "14:07" }
+      ],
+      tasks: [
+        { t: "Migrate Postgres volumes", state: "doing" },
+        { t: "Move reverse proxy + certs", state: "todo" },
+        { t: "Decommission old NUC", state: "todo" }
+      ]},
+    { id: "paper", name: "Anomaly Detection Paper", color: "#b58ee0",
+      status: "deadline", goal: "Submit to conference — deadline Sep 5",
+      agents: [],
+      tasks: [
+        { t: "Rerun eval on v2 dataset", state: "doing" },
+        { t: "Write related-work section", state: "todo" },
+        { t: "Address advisor comments", state: "blocked" }
+      ]},
+    { id: "apartment", name: "Apartment Hunt", color: "#7fc98a",
+      status: "background", goal: "Find 2br under budget before Nov",
+      agents: [],
+      tasks: [
+        { t: "Visit Riverside listing", state: "todo" },
+        { t: "Compare commute times", state: "todo" }
+      ]}
+  ],
+  captures: [
+    { t: "idea: agents should emit confidence with every status report", ts: "13:22" },
+    { t: "check if ZFS snapshot schedule survives migration", ts: "10:45" },
+    { t: "landlord mentioned garage option?? follow up", ts: "yesterday" }
+  ],
+  events: [
+    { ts: "09:12", proj: "albion", agent: "market-bot", kind: "status", t: "Paused: price feed schema changed upstream, refactor needed" },
+    { ts: "10:03", proj: "paper", kind: "note", t: "Advisor replied: eval section needs v2 dataset numbers" },
+    { ts: "10:45", proj: null, kind: "capture", t: "check if ZFS snapshot schedule survives migration" },
+    { ts: "11:20", proj: "albion", agent: "packet-tracer", kind: "status", t: "Gate-probe run #2: emitted 1 move, restarted client — server position UNCHANGED" },
+    { ts: "11:58", proj: "albion", agent: "navigator", kind: "blocked", t: "Blocked: cannot route through gates until desync strategy chosen" },
+    { ts: "12:41", proj: "albion", agent: "packet-tracer", kind: "status", t: "Gate-probe run #3: same result. Server never applied any move after gate transition" },
+    { ts: "13:22", proj: null, kind: "capture", t: "idea: agents should emit confidence with every status report" },
+    { ts: "14:07", proj: "homelab", agent: "infra-agent", kind: "status", t: "Postgres volume 2/5 migrated, ETA 40m for remainder" }
+  ],
+  decisions: [
+    { id: "decision-gate-desync", proj: "albion", state: "pending",
+      title: "Gate desync fix: restart-probe vs re-handshake",
+      options: ["Restart-probe: auto-restart client after each gate to resync",
+                "Re-handshake: reverse-engineer and replay the gate handshake packets"],
+      due: "today" },
+    { id: "decision-eval-scope", proj: "paper", state: "pending",
+      title: "Eval scope: rerun full grid or only v2 delta",
+      options: ["Full grid (2 days compute)", "v2 delta only (4h, weaker claim)"],
+      due: "Aug 25" }
+  ],
+  decisionContext: [
+    { ts: "Aug 19 16:10", t: "navigator first reported chars 'rubber-banding' to gate entrance after transitions" },
+    { ts: "Aug 19 18:34", t: "hypothesis 1: movement-lock flag not cleared — DISPROVEN (flag clears in packet trace)" },
+    { ts: "Aug 20 11:02", t: "hypothesis 2: reliable-seq collision after zone load — DISPROVEN (seqs contiguous)" },
+    { ts: "Aug 20 15:47", t: "key insight: all movement after gate is client-side prediction; server acks contain no position echo" },
+    { ts: "Aug 21 12:30", t: "restart experiment: emit 1 move, restart client, read authoritative resume position → server never moved the char" },
+    { ts: "Aug 21 12:55", t: "conclusion: server drops move stream after gate until a fresh handshake occurs. Two viable fixes identified" },
+    { ts: "Aug 22 12:41", t: "packet-tracer run #3 confirms: reproducible 3/3 times" }
+  ],
+  incomingReport: { ts: "14:31", proj: "albion", agent: "packet-tracer", kind: "status",
+    t: "Gate-probe run #4 complete: server pos unchanged after 3 moves — desync confirmed at handshake layer" }
+};
+
+/* ---------- brief prose (per-project State of the world) ---------- */
+const BRIEFS = {
+  albion: {
+    summary: [
+      "The gathering loop runs clean on single maps, but cross-map travel is dead in the water: every gate transition silently desyncs the character.",
+      "Three probe runs have now shown the same thing — after a gate, all movement is client-side prediction and the server never applies a single move.",
+      "The old hypotheses (movement-lock flag, reliable-seq collision) are both disproven; the fault is isolated to the post-gate handshake layer.",
+      "navigator is fully blocked on this and has been since 11:58; market-bot is parked separately waiting on the price feed refactor.",
+      "A decision between the two viable fixes — restart-probe vs re-handshake — is due today and gates all routing work.",
+      "Next: commit to a fix, unblock navigator, then return to the price feed refactor."
+    ],
+    extra: "Run #4 just re-confirmed it live: server position unchanged after 3 moves — the desync is definitively at the handshake layer.",
+    goals: ["Fully autonomous gathering + market loop",
+            "Zero manual interventions per 8-hour session",
+            "Cross-map routing that survives gate transitions"]
+  },
+  homelab: {
+    summary: [
+      "Migration is mid-flight: infra-agent is moving Postgres volumes onto the new ZFS pool, 2 of 5 done with roughly 40 minutes remaining.",
+      "Nothing user-facing has moved yet — reverse proxy and certs stay on the old NUC until the data layer settles.",
+      "Open question captured this morning: whether the ZFS snapshot schedule survives the migration, still unverified.",
+      "Next: finish volumes, then cut over the proxy in one evening window, then decommission."
+    ],
+    goals: ["Move all services from old NUC to Proxmox cluster",
+            "No service downtime longer than one evening window"]
+  },
+  paper: {
+    summary: [
+      "Deadline Sep 5 and the critical path runs through the v2 dataset numbers the advisor asked for on the 20th.",
+      "The eval rerun is in progress; related-work is untouched and advisor comments are blocked behind the eval-scope decision.",
+      "That decision — full grid (2 days compute) vs v2-delta only (4h, weaker claim) — is due Aug 25.",
+      "Next: settle eval scope, then write related-work while compute runs."
+    ],
+    goals: ["Submit to conference — deadline Sep 5",
+            "Eval section rebuilt on v2 dataset numbers"]
+  },
+  apartment: {
+    summary: [
+      "Background-tempo search for a 2br under budget before Nov; nothing urgent this week.",
+      "The Riverside listing is the current front-runner and still needs a visit; commute comparisons haven't been done.",
+      "Loose thread from the landlord call: a garage option was mentioned — follow up before it's forgotten.",
+      "Next: book the Riverside visit."
+    ],
+    goals: ["Find 2br under budget before Nov",
+            "Keep commute under 35 min door-to-door"]
+  }
+};
+
+/* ---------- state ---------- */
+const S = {
+  current: "albion",
+  captures: WORLD.captures.slice(),
+  events: WORLD.events.slice(),
+  reported: false,
+  decided: null,          // chosen option index for gate-desync
+  memoOpen: false,
+  unread: {}              // projId -> count of unseen log inserts
+};
+const gateDecision = WORLD.decisions.find(d => d.id === "decision-gate-desync");
+
+const $ = id => document.getElementById(id);
+const esc = s => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+
+/* ---------- sidebar ---------- */
+function renderSidebar(){
+  const sb = $("sidebar");
+  let h = `<div class="side-h">Scratch</div>`;
+  h += docItem("inbox", "✎", "Inbox scratchpad", S.captures.length + " unsorted", null);
+  h += `<div class="side-h" style="margin-top:16px">Project briefs</div>`;
+  for (const p of WORLD.projects){
+    const meta = p.status === "deadline" ? "Sep 5 ⏰" : p.status;
+    h += docItem(p.id, null, p.name, meta, p.color);
+  }
+  h += `<div class="side-note">A brief is meant to be <i>re-read</i>, top to bottom, in under a minute.
+    Agents append to the Log; the State&nbsp;of&nbsp;the&nbsp;world section is rewritten to stay current.<br><br>
+    <kbd>c</kbd> capture &nbsp;·&nbsp; <kbd>esc</kbd> dismiss</div>`;
+  sb.innerHTML = h;
+  sb.querySelectorAll(".doc-item").forEach(el =>
+    el.addEventListener("click", () => openDoc(el.dataset.id)));
+}
+function docItem(id, icon, name, meta, color){
+  const active = S.current === id ? " active" : "";
+  const unread = S.unread[id] ? `<span class="badge">${S.unread[id]}</span>` : "";
+  const dot = color ? `<span class="dot" style="background:${color}"></span>`
+                    : `<span style="font-size:13px;width:8px;text-align:center">${icon}</span>`;
+  return `<div class="doc-item${active}" data-id="${id}" id="side-${id}">
+    ${dot}<span class="nm">${name}</span>${unread}<span class="meta">${meta}</span></div>`;
+}
+
+function openDoc(id){
+  S.current = id;
+  S.unread[id] = 0;
+  renderSidebar();
+  renderDoc();
+  $("main").scrollTop = 0;
+}
+
+/* ---------- document ---------- */
+function renderDoc(){
+  const doc = $("doc");
+  if (S.current === "inbox"){ doc.innerHTML = inboxHTML(); return; }
+  const p = WORLD.projects.find(x => x.id === S.current);
+  const b = BRIEFS[p.id];
+  const statusColors = { active:"var(--green)", deadline:"var(--red)", background:"var(--ink-faint)" };
+  const sc = statusColors[p.status];
+
+  let summary = b.summary.map(s=>esc(s)).join(" ");
+  if (p.id === "albion" && S.reported)
+    summary += ` <span class="sentence-new">${esc(b.extra)}</span>`;
+
+  let h = `<h1>${p.name}</h1>
+  <div class="doc-sub">
+    <span class="status-chip" style="color:${sc};border-color:${sc}">${p.status}</span>
+    <span>${esc(p.goal)}</span>
+    <span style="color:var(--ink-faint)">· last edit ${S.reported && p.id==="albion" ? "14:31" : "14:07"}</span>
+  </div>
+
+  <h2>State of the world <span class="upd${S.reported && p.id==="albion" ? " show" : ""}" id="updTag">✦ updated 14:31 by packet-tracer</span></h2>
+  <div class="summary-block" id="summaryBlock"><p>${summary}</p></div>
+
+  <h2>Goals</h2>
+  <ul class="goals">${b.goals.map(g=>`<li>${esc(g)}</li>`).join("")}</ul>
+
+  <h2>Active work</h2>`;
+
+  if (p.agents.length){
+    h += p.agents.map(a=>{
+      const state = (a.id==="navigator" && S.decided!==null) ? "ready" : a.state;
+      return `<div class="work-row"><span class="who">${a.name}</span>
+        <span class="what">${esc(a.task)}</span>
+        <span class="st ${state}">${state}</span></div>`;
+    }).join("");
+  } else {
+    h += `<p class="dim" style="font-size:14px">No agents on this project — human-paced.</p>`;
+  }
+  h += `<div style="height:14px"></div>`;
+  h += p.tasks.map(t=>{
+    const done = t.state==="done", box = done?"[×]":(t.state==="doing"?"[◐]":(t.state==="blocked"?"[!]":"[ ]"));
+    const tState = (p.id==="albion" && t.t==="Fix gate desync" && S.decided!==null) ? "doing" : t.state;
+    const box2 = (p.id==="albion" && t.t==="Fix gate desync" && S.decided!==null) ? "[◐]" : box;
+    return `<div class="task-row ${done?"done":""} ${tState==="blocked"?"blockedt":""} ${tState==="doing"?"doing":""}">
+      <span class="box">${box2}</span><span>${esc(t.t)}</span></div>`;
+  }).join("");
+
+  // decision callout
+  const dec = WORLD.decisions.find(d=>d.proj===p.id);
+  if (dec) h += calloutHTML(dec);
+
+  // log
+  h += `<h2>Log <span style="font-weight:400;letter-spacing:0;text-transform:none;font-size:11px">append-only</span></h2>
+    <div id="logList">` + projectEvents(p.id).map(e=>logEntryHTML(e,false)).join("") + `</div>`;
+
+  doc.innerHTML = h;
+
+  const co = doc.querySelector(".callout.pending");
+  if (co) co.addEventListener("click", ev => {
+    if (ev.target.closest("button") || ev.target.closest(".memo")) return;
+    toggleMemo();
+  });
+  doc.querySelectorAll(".opt button").forEach(btn =>
+    btn.addEventListener("click", ev => { ev.stopPropagation(); commitDecision(+btn.dataset.opt); }));
+}
+
+function projectEvents(pid){
+  return S.events.filter(e => e.proj === pid);
+}
+function logEntryHTML(e, fresh){
+  const agent = e.agent ? `<span class="agent">${e.agent}</span> — ` : "";
+  return `<div class="log-entry kind-${e.kind}${fresh?" ins":""}">
+    <span class="ts">${e.ts}</span><span class="tx">${agent}${esc(e.t)}</span></div>`;
+}
+
+function calloutHTML(dec){
+  if (dec.id === "decision-gate-desync" && S.decided !== null){
+    const chosen = dec.options[S.decided].split(":")[0];
+    return `<div class="callout resolved">
+      <div class="co-head"><span class="flag">✓</span>
+        <span class="co-title">Decided: ${chosen}</span>
+        <span class="co-due" style="color:var(--green);border-color:#4c6b45">resolved 14:32</span></div>
+      <div class="co-sub">${esc(dec.options[S.decided])} · navigator unblocked, routing work resumes.</div>
+    </div>`;
+  }
+  const pendingCls = dec.id === "decision-gate-desync" ? " pending" : "";
+  const memo = dec.id === "decision-gate-desync" ? memoHTML(dec) : "";
+  return `<div class="callout${pendingCls}">
+    <div class="co-head"><span class="flag">⚑</span>
+      <span class="co-title">${esc(dec.title)}</span>
+      <span class="co-due">due ${dec.due}</span></div>
+    <div class="co-sub">${dec.id==="decision-gate-desync"
+      ? (S.memoOpen ? "Decision memo — the full trail, oldest first. Read, then commit." : "Blocking navigator · click to expand the decision memo ▾")
+      : "Pending — memo not yet compiled."}</div>
+    ${memo}
+  </div>`;
+}
+function memoHTML(dec){
+  const cls = key => key.includes("key insight") ? "key" : (key.startsWith("conclusion") ? "concl" : "");
+  let entries = WORLD.decisionContext.map(c =>
+    `<div class="memo-entry ${cls(c.t)}"><span class="ts">${c.ts}</span><span class="tx">${esc(c.t)}</span></div>`).join("");
+  if (S.reported) entries +=
+    `<div class="memo-entry"><span class="ts">Aug 22 14:31</span><span class="tx">${esc("run #4: reproducible 4/4 — confidence now very high")}</span></div>`;
+  return `<div class="memo${S.memoOpen?" open":""}" id="memo"><div class="memo-inner">
+    <p class="memo-lede">You've been away from this for a bit. Here is everything that led up to the decision, oldest first — about a 40-second read.</p>
+    ${entries}
+    <div class="options">
+      <div class="opt"><div class="opt-t"><b>Restart-probe</b> — auto-restart client after each gate to resync. Crude but ships today; ~3&nbsp;min penalty per gate.</div>
+        <button data-opt="0">Choose restart-probe</button></div>
+      <div class="opt"><div class="opt-t"><b>Re-handshake</b> — reverse-engineer and replay the gate handshake packets. Clean fix; est. 2–3 days of protocol work.</div>
+        <button data-opt="1">Choose re-handshake</button></div>
+    </div>
+  </div></div>`;
+}
+function toggleMemo(){
+  S.memoOpen = !S.memoOpen;
+  renderDoc();
+  if (S.memoOpen) setTimeout(()=> $("memo") && $("memo").scrollIntoView({block:"nearest", behavior:"smooth"}), 150);
+}
+
+/* ---------- workflow 3: commit decision ---------- */
+function commitDecision(idx){
+  S.decided = idx;
+  S.memoOpen = false;
+  gateDecision.state = "resolved";
+  const chosen = gateDecision.options[idx].split(":")[0];
+  S.events.push({ ts:"14:32", proj:"albion", kind:"decision",
+    t:`Decision resolved: chose ${chosen}. navigator unblocked; gate-desync task moves to in-progress.` });
+  renderDoc();
+  const last = document.querySelector("#logList .log-entry:last-child");
+  if (last) last.classList.add("ins");
+  toast(`✓ Decision committed: ${chosen}`, "Callout rewritten to resolved · appended to Albion log");
+  document.querySelector(".callout").scrollIntoView({block:"center", behavior:"smooth"});
+}
+
+/* ---------- workflow 2: agent report ---------- */
+function simulateReport(){
+  if (S.reported) { toast("Report already arrived", "packet-tracer has nothing new — for now."); return; }
+  S.reported = true;
+  S.events.push(WORLD.incomingReport);
+  if (S.current === "albion"){
+    renderDoc();
+    const last = document.querySelector("#logList .log-entry:last-child");
+    if (last) last.classList.add("ins");
+    const sum = $("summaryBlock");
+    sum.classList.add("ripple");
+    setTimeout(()=> sum.classList.remove("ripple"), 2500);
+  } else {
+    S.unread["albion"] = (S.unread["albion"]||0) + 1;
+    renderSidebar();
+    const item = $("side-albion");
+    if (item){ item.classList.add("pulse"); setTimeout(()=>item.classList.remove("pulse"),1700); }
+  }
+  toast("▶ packet-tracer reported at 14:31", "Appended to Albion log · State of the world rewritten");
+}
+
+/* ---------- workflow 1: capture ---------- */
+function inboxHTML(){
+  let h = `<h1>Inbox scratchpad</h1>
+  <div class="doc-sub"><span class="status-chip" style="color:var(--accent);border-color:var(--accent-dim)">unsorted</span>
+    <span>Things caught mid-thought. File them later, or never.</span></div>
+  <h2>Captures</h2><div id="capList">`;
+  h += S.captures.map((c,i)=>
+    `<div class="log-entry kind-capture${i===0 && c._fresh ? " ins":""}">
+       <span class="ts">${c.ts}</span><span class="tx">${esc(c.t)}</span></div>`).join("");
+  h += `</div><p class="dim" style="margin-top:26px;font-size:13.5px;font-family:var(--sans)">
+    Tip: press <kbd>c</kbd> anywhere to add to this page without leaving the brief you're reading.</p>`;
+  return h;
+}
+function openCapture(){
+  $("captureWrap").classList.add("open");
+  setTimeout(()=> $("captureInput").focus(), 60);
+}
+function closeCapture(){
+  $("captureWrap").classList.remove("open");
+  $("captureInput").value = "";
+  $("captureInput").blur();
+}
+function saveCapture(){
+  const v = $("captureInput").value.trim();
+  if (!v) { closeCapture(); return; }
+  S.captures.unshift({ t: v, ts: "14:3" + Math.min(9, 2 + S.captures.length % 7), _fresh: true });
+  S.events.push({ ts:"now", proj:null, kind:"capture", t:v });
+  closeCapture();
+  if (S.current === "inbox"){
+    renderDoc();
+  } else {
+    S.unread["inbox"] = (S.unread["inbox"]||0) + 1;
+  }
+  renderSidebar();
+  const item = $("side-inbox");
+  if (item){ item.classList.add("pulse"); setTimeout(()=>item.classList.remove("pulse"),1700); }
+  toast("✎ Captured → Inbox scratchpad", "No classification needed. It'll be there when you are.");
+}
+
+/* ---------- chrome ---------- */
+let toastTimer;
+function toast(t, sub){
+  const el = $("toast");
+  el.innerHTML = `<div>${t}</div><div class="t-sub">${sub}</div>`;
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=> el.classList.remove("show"), 3600);
+}
+function togglePanel(id){
+  const el = $(id);
+  const was = el.classList.contains("open");
+  ["flowsPanel","comparePanel"].forEach(p => $(p).classList.remove("open"));
+  if (!was) el.classList.add("open");
+}
+
+$("btnCapture").addEventListener("click", openCapture);
+$("btnReport").addEventListener("click", simulateReport);
+$("btnFlows").addEventListener("click", ()=>togglePanel("flowsPanel"));
+$("btnCompare").addEventListener("click", ()=>togglePanel("comparePanel"));
+$("captureInput").addEventListener("keydown", e=>{
+  if (e.key === "Enter") saveCapture();
+  if (e.key === "Escape") closeCapture();
+  e.stopPropagation();
+});
+document.addEventListener("keydown", e=>{
+  if (e.target.tagName === "INPUT") return;
+  if (e.key === "c"){ e.preventDefault(); openCapture(); }
+  if (e.key === "Escape"){ closeCapture(); ["flowsPanel","comparePanel"].forEach(p=>$(p).classList.remove("open")); }
+});
+
+renderSidebar();
+renderDoc();
+setTimeout(()=>{ if(!S.reported) simulateReport(); }, 8000);
+</script>
+</body>
+</html>

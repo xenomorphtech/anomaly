@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Context OS — 10 Paradigms</title>
+<style>
+  :root{
+    --bg:#0d0f14; --panel:#151822; --panel2:#1b1f2c; --line:#262b3a;
+    --text:#e6e9f2; --dim:#8b93a7; --accent:#e0a458;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font:15px/1.55 -apple-system,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;padding:48px 24px 80px}
+  .wrap{max-width:1100px;margin:0 auto}
+  h1{font-size:28px;letter-spacing:-.02em;margin-bottom:8px}
+  .sub{color:var(--dim);max-width:72ch;margin-bottom:10px}
+  .flows{color:var(--dim);font-size:13px;margin-bottom:36px;padding:12px 16px;background:var(--panel);border:1px solid var(--line);border-radius:10px}
+  .flows b{color:var(--text);font-weight:600}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:18px}
+  a.card{display:block;text-decoration:none;color:inherit;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px 20px 18px;transition:transform .15s ease, border-color .15s ease, background .15s ease;position:relative;overflow:hidden}
+  a.card:hover{transform:translateY(-3px);border-color:var(--hue);background:var(--panel2)}
+  .num{position:absolute;top:14px;right:16px;font-size:26px;font-weight:700;color:var(--line);letter-spacing:-.03em}
+  a.card:hover .num{color:var(--hue)}
+  .tag{display:inline-block;font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--hue);margin-bottom:8px}
+  h2{font-size:18px;margin-bottom:6px;letter-spacing:-.01em}
+  .desc{color:var(--dim);font-size:13.5px}
+  .best{margin-top:12px;font-size:12px;color:var(--dim)}
+  .best b{color:var(--text);font-weight:600}
+  .bar{height:3px;border-radius:2px;background:var(--hue);width:34px;margin-top:14px;opacity:.9}
+  footer{margin-top:44px;color:var(--dim);font-size:13px}
+  h2.round{font-size:15px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin:8px 0 10px;border-top:1px solid var(--line);padding-top:26px}
+  .sub code{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:0 5px;font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Context OS — 10 interface paradigms</h1>
+  <p class="sub">Ten different answers to the same problem: managing many unrelated projects and goals without strict classification, absorbing agent status reports, and re-orienting fast when a decision has to be made. Same fake world in every mock — only the paradigm changes.</p>
+  <div class="flows">Every mock demonstrates the same core workflows: <b>Capture</b> a thought without classifying it &nbsp;·&nbsp; <b>Agent report</b> arrives (simulate button) &nbsp;·&nbsp; <b>Orient</b> — re-read accumulated context behind the pending “gate desync” decision, then commit. Look for the “Try the workflows” hint panel on each page.</div>
+
+  <h2 class="round">Round 2 — RTS-informed hybrids</h2>
+  <p class="sub">Converged designs. Each fuses several round-1 dimensions and implements the full RTS contract learned from top-level play: an always-visible glance surface with event pings, constant-time navigation (<code>1</code>–<code>4</code>, <code>Space</code> = jump to alert, <code>Esc</code> = camera back), alerts that never steal the viewport, an idle/blocked-agent button, fog-of-war staleness on untouched contexts, a ~10-second <code>1 2 3 4</code> sweep with delta-first resumes, and deep re-read only as the fallback for cold contexts.</p>
+  <div class="grid" style="margin-bottom:40px">
+    <a class="card" style="--hue:#e0a458" href="11-commander.html"><span class="num">11</span><span class="tag">Commander</span><h2>The literal RTS</h2><p class="desc">Projects as bases on a map, agents as units, minimap with viewport rect, command card, attention-budget resource bar.</p><p class="best"><b>Fuses:</b> spatial canvas + fleet board + resume cards.</p><div class="bar"></div></a>
+    <a class="card" style="--hue:#7ea6e0" href="12-hud-operations.html"><span class="num">12</span><span class="tag">Operations HUD</span><h2>Stable chrome, swappable center</h2><p class="desc">The frame never changes — rail, ticker, minimap, fleet bar. The center renders each project as Brief, Thread, or Board.</p><p class="best"><b>Fuses:</b> briefs + thread chat + boards + fleet, in RTS chrome.</p><div class="bar"></div></a>
+    <a class="card" style="--hue:#7fc98a" href="13-patrol.html"><span class="num">13</span><span class="tag">Patrol</span><h2>The macro cycle, reified</h2><p class="desc">Tab through a rehearsed rotation of delta-first resume cards with inline triage; staleness dials reset as you sweep.</p><p class="best"><b>Fuses:</b> context stack + inbox triage + replay recovery.</p><div class="bar"></div></a>
+    <a class="card" style="--hue:#9a86e8" href="14-starmap.html"><span class="num">14</span><span class="tag">Starmap</span><h2>The minimap IS the interface</h2><p class="desc">Semantic zoom: world → star system → event log, one continuous space, camera flights instead of navigation.</p><p class="best"><b>Fuses:</b> spatial + graph structure + timeline.</p><div class="bar"></div></a>
+    <a class="card" style="--hue:#67d0c2" href="15-warroom.html"><span class="num">15</span><span class="tag">War Room</span><h2>Interrupts left, truth center, forces right</h2><p class="desc">A triage queue feeding a state-of-the-world brief, with every agent in a production bar. Dense keyboard layer.</p><p class="best"><b>Fuses:</b> inbox + living briefs + fleet + TUI density.</p><div class="bar"></div></a>
+  </div>
+
+  <h2 class="round">Round 1 — ten pure paradigms</h2>
+  <div class="grid">
+    <a class="card" style="--hue:#e0a458" href="01-mission-control.html"><span class="num">01</span><span class="tag">Mission Control</span><h2>Flight-director dashboard</h2><p class="desc">Project lanes, an agent fleet board, and an alert strip for anything needing you. Everything at a glance, nothing hidden.</p><p class="best"><b>Best when:</b> many agents running, you mostly supervise.</p><div class="bar"></div></a>
+    <a class="card" style="--hue:#d2a06f" href="02-timeline-journal.html"><span class="num">02</span><span class="tag">Timeline · Journal</span><h2>One chronological stream</h2><p class="desc">All projects interleaved in a single narrative log with decision flags and a replay mode that retraces how you got here.</p><p class="best"><b>Best when:</b> orientation = re-reading the story.</p><div class="bar"></div></a>
+    <a class="card" style="--hue:#6fb3d2" href="03-spatial-canvas.html"><span class="num">03</span><span class="tag">Spatial Canvas</span><h2>Projects as places</h2><p class="desc">Pan and zoom an infinite map; clusters instead of folders, captures floating homeless between them — legitimately unclassified.</p><p class="best"><b>Best when:</b> spatial memory is how you think.</p><div class="bar"></div></a>
+    <a class="card" style="--hue:#7ea6e0" href="04-inbox-triage.html"><span class="num">04</span><span class="tag">Inbox · Triage</span><h2>Everything arrives, you triage</h2><p class="desc">Agent reports, captures and decisions land in one inbox; assign, snooze, or resolve. Zero-inbox as the rhythm of control.</p><p class="best"><b>Best when:</b> you want a forcing function, not a view.</p><div class="bar"></div></a>
+    <a class="card" style="--hue:#9a86e8" href="05-thread-chat.html"><span class="num">05</span><span class="tag">Thread-centric</span><h2>Each project is a conversation</h2><p class="desc">Agents talk in project channels; decisions are pinned messages; re-reading is just scrolling back through the thread.</p><p class="best"><b>Best when:</b> agent dialogue is the primary record.</p><div class="bar"></div></a>
+    <a class="card" style="--hue:#67d0c2" href="06-knowledge-graph.html"><span class="num">06</span><span class="tag">Graph View</span><h2>Goals → projects → tasks as nodes</h2><p class="desc">Status lives on the graph: working agents pulse, blocked ones ring red. Expand the decision node to fan out its history.</p><p class="best"><b>Best when:</b> structure and dependencies matter most.</p><div class="bar"></div></a>
+    <a class="card" style="--hue:#e08a8a" href="07-fluid-board.html"><span class="num">07</span><span class="tag">Fluid Boards</span><h2>Kanban without the walls</h2><p class="desc">Swimlanes per project over a soft todo→done gradient; cards can live between lanes, because not everything classifies.</p><p class="best"><b>Best when:</b> you think with your hands, dragging things.</p><div class="bar"></div></a>
+    <a class="card" style="--hue:#b58ee0" href="08-notebook-briefs.html"><span class="num">08</span><span class="tag">Living Documents</span><h2>A brief per project</h2><p class="desc">Each project is a document with a maintained “state of the world” on top and an append-only log where agent updates land as diffs.</p><p class="best"><b>Best when:</b> prose is your source of truth.</p><div class="bar"></div></a>
+    <a class="card" style="--hue:#8fce6e" href="09-terminal-tui.html"><span class="num">09</span><span class="tag">Terminal · TUI</span><h2>tmux for your life</h2><p class="desc">Panes, box-drawing borders, an agent table, a scrolling event log, and a <code>:</code> command palette. Keyboard-first, maximum density.</p><p class="best"><b>Best when:</b> you live in a terminal anyway.</p><div class="bar"></div></a>
+    <a class="card" style="--hue:#7fc98a" href="10-context-stack.html"><span class="num">10</span><span class="tag">Context Stack</span><h2>Push, pop, resume</h2><p class="desc">An explicit stack of working contexts; every card is a resume card — where you left off, what changed since, what's pending.</p><p class="best"><b>Best when:</b> context-switching itself is the enemy.</p><div class="bar"></div></a>
+  </div>
+  <footer>All mocks are self-contained HTML — open any of them directly. Same dataset everywhere: Albion automation (3 agents, 1 blocked on a decision), homelab migration, a paper deadline, and an apartment hunt.</footer>
+</div>
+</body>
+</html>

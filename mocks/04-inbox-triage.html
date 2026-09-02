@@ -1,0 +1,735 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inbox — Context Triage</title>
+<style>
+:root{
+  --bg:#0d1320; --bg2:#111a2b; --bg3:#152034; --panel:#131c2e;
+  --line:#20304a; --line2:#2a3d5c;
+  --text:#d7e0ee; --mut:#8195b1; --dim:#5c6f8c;
+  --acc:#58a6ff; --acc2:#3b82d6; --ok:#5fd39a; --warn:#f0b45c; --bad:#f07a7a;
+  --sel:#1a2a45; --hov:#172440;
+  --r:8px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--bg); color:var(--text);
+  font:13px/1.45 -apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  -webkit-font-smoothing:antialiased; overflow:hidden;
+}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-thumb{background:#23324e;border-radius:5px;border:2px solid var(--bg)}
+::-webkit-scrollbar-track{background:transparent}
+
+/* ---------- top bar ---------- */
+#topbar{
+  height:44px; display:flex; align-items:center; gap:14px; padding:0 14px;
+  background:var(--bg2); border-bottom:1px solid var(--line); position:relative; z-index:30;
+}
+#topbar .logo{
+  width:22px;height:22px;border-radius:6px;flex:0 0 auto;
+  background:linear-gradient(135deg,var(--acc),#7a5df0);
+  display:grid;place-items:center;font-size:12px;font-weight:700;color:#0b1220;
+}
+#topbar b{font-size:13.5px;letter-spacing:.2px}
+#topbar .why{color:var(--mut);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+#topbar .sp{flex:1}
+.tbtn{
+  padding:5px 11px;border-radius:6px;font-size:12px;color:var(--mut);
+  border:1px solid var(--line);background:var(--bg3);transition:all .15s;white-space:nowrap;
+}
+.tbtn:hover{color:var(--text);border-color:var(--line2);background:var(--hov)}
+.tbtn.primary{color:#dbeafe;background:var(--acc2);border-color:var(--acc2)}
+.tbtn.primary:hover{background:var(--acc);border-color:var(--acc)}
+.tbtn:disabled{opacity:.5;cursor:default}
+#topbar a{color:var(--dim);font-size:12px;text-decoration:none}
+#topbar a:hover{color:var(--acc)}
+
+/* ---------- layout ---------- */
+#app{display:flex;height:calc(100% - 44px)}
+#nav{width:218px;flex:0 0 auto;background:var(--bg2);border-right:1px solid var(--line);
+  padding:10px 8px;overflow-y:auto;display:flex;flex-direction:column}
+#list{width:340px;flex:0 0 auto;background:var(--bg);border-right:1px solid var(--line);
+  display:flex;flex-direction:column;min-width:0}
+#read{flex:1;min-width:0;background:var(--bg);display:flex;flex-direction:column}
+
+/* ---------- nav ---------- */
+.navhead{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);
+  padding:8px 10px 5px}
+.ctx{
+  display:flex;align-items:center;gap:9px;padding:7px 10px;border-radius:7px;
+  color:var(--mut);transition:background .12s,color .12s;width:100%;text-align:left;margin-bottom:1px;
+}
+.ctx:hover{background:var(--hov);color:var(--text)}
+.ctx.sel{background:var(--sel);color:var(--text)}
+.ctx .cdot{width:8px;height:8px;border-radius:3px;flex:0 0 auto}
+.ctx .cname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px}
+.ctx .cnt{
+  min-width:20px;text-align:center;font-size:10.5px;font-weight:700;padding:1px 6px;border-radius:9px;
+  background:#1d2c47;color:var(--acc);
+}
+.ctx .cnt.zero{background:transparent;color:var(--dim);font-weight:400}
+.ctx .sub{font-size:10.5px;color:var(--dim);display:block;margin-top:1px}
+.navfoot{margin-top:auto;padding:10px;color:var(--dim);font-size:11px;border-top:1px solid var(--line)}
+.navfoot .kbd,#hints .kbd{
+  display:inline-block;padding:0 5px;border:1px solid var(--line2);border-bottom-width:2px;
+  border-radius:4px;font-size:10.5px;background:var(--bg3);color:var(--mut);font-family:ui-monospace,monospace;
+}
+
+/* ---------- list ---------- */
+#listhead{
+  padding:10px 14px;border-bottom:1px solid var(--line);display:flex;align-items:baseline;gap:8px;
+  flex:0 0 auto;background:var(--bg2);
+}
+#listhead b{font-size:13px}
+#listhead .n{color:var(--dim);font-size:11.5px}
+#items{overflow-y:auto;flex:1}
+.item{
+  display:flex;gap:9px;padding:9px 12px 9px 10px;border-bottom:1px solid #16223a;cursor:pointer;
+  transition:background .12s;position:relative;width:100%;text-align:left;align-items:flex-start;
+}
+.item:hover{background:var(--hov)}
+.item.sel{background:var(--sel)}
+.item.sel::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--acc)}
+.udot{width:7px;height:7px;border-radius:50%;background:var(--acc);flex:0 0 auto;margin-top:6px;
+  box-shadow:0 0 6px rgba(88,166,255,.55)}
+.item.read .udot{background:transparent;box-shadow:none}
+.ibody{flex:1;min-width:0}
+.irow1{display:flex;align-items:baseline;gap:8px}
+.ifrom{font-size:12.5px;color:var(--mut);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.item:not(.read) .ifrom{color:var(--text);font-weight:600}
+.its{font-size:10.5px;color:var(--dim);flex:0 0 auto}
+.isnip{font-size:12px;color:var(--dim);margin-top:2px;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+.item:not(.read) .isnip{color:var(--mut)}
+.itags{display:flex;gap:5px;margin-top:4px;flex-wrap:wrap}
+.tag{font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;padding:1.5px 6px;border-radius:4px;
+  background:#1c2a44;color:var(--mut)}
+.tag.dec{background:#3a2a14;color:var(--warn)}
+.tag.blk{background:#3b1d22;color:var(--bad)}
+.tag.cap{background:#1d3229;color:var(--ok)}
+.tag.res{background:#173226;color:var(--ok)}
+.tag.flag{background:#33203c;color:#cf9bea}
+.tag.proj{background:transparent;border:1px solid var(--line)}
+.item.gone{opacity:0;transform:translateX(28px);transition:all .28s ease;pointer-events:none}
+.item.new{animation:slidein .35s ease}
+@keyframes slidein{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
+#zero{display:none;text-align:center;padding:70px 20px;color:var(--dim)}
+#zero .big{font-size:34px;margin-bottom:10px}
+#zero b{color:var(--mut);font-size:14px;display:block;margin-bottom:4px}
+
+/* ---------- reading pane ---------- */
+#readempty{margin:auto;text-align:center;color:var(--dim)}
+#readempty .big{font-size:30px;margin-bottom:8px;opacity:.5}
+#readwrap{display:none;flex-direction:column;height:100%}
+#actions{
+  display:flex;gap:6px;align-items:center;padding:9px 16px;border-bottom:1px solid var(--line);
+  background:var(--bg2);flex:0 0 auto;position:relative;
+}
+.abtn{
+  display:flex;align-items:center;gap:6px;padding:5px 11px;border-radius:6px;font-size:12px;
+  color:var(--mut);border:1px solid transparent;transition:all .13s;
+}
+.abtn:hover{background:var(--hov);color:var(--text);border-color:var(--line)}
+#assignmenu{
+  position:absolute;top:40px;left:14px;background:var(--bg3);border:1px solid var(--line2);
+  border-radius:var(--r);box-shadow:0 12px 34px rgba(0,0,0,.5);padding:5px;z-index:40;display:none;min-width:200px;
+}
+#assignmenu button{display:flex;align-items:center;gap:9px;width:100%;text-align:left;
+  padding:7px 10px;border-radius:6px;font-size:12.5px;color:var(--mut)}
+#assignmenu button:hover{background:var(--hov);color:var(--text)}
+#msg{flex:1;overflow-y:auto;padding:22px 30px 40px}
+.mhead{padding-bottom:14px;border-bottom:1px solid var(--line);margin-bottom:16px}
+.mhead h1{font-size:17px;font-weight:600;letter-spacing:.1px;margin-bottom:9px}
+.metaline{display:flex;align-items:center;gap:9px;color:var(--mut);font-size:12px;flex-wrap:wrap}
+.av{width:26px;height:26px;border-radius:7px;display:grid;place-items:center;
+  font-size:11px;font-weight:700;color:#0b1220;flex:0 0 auto}
+.mbody{font-size:13.5px;color:var(--text);max-width:640px}
+.mbody p{margin:0 0 12px}
+.mbody .quiet{color:var(--mut);font-size:12.5px}
+.kv{display:grid;grid-template-columns:110px 1fr;gap:4px 14px;margin:14px 0;font-size:12.5px;max-width:520px}
+.kv dt{color:var(--dim)}
+.kv dd{color:var(--mut)}
+
+/* decision brief */
+.brief{max-width:660px}
+.brief .salut{color:var(--mut);font-size:12.5px;margin-bottom:14px}
+.bsec{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim);
+  margin:20px 0 10px;display:flex;align-items:center;gap:10px}
+.bsec::after{content:"";flex:1;height:1px;background:var(--line)}
+.hentry{display:flex;gap:14px;padding:7px 0 7px 12px;border-left:2px solid var(--line);
+  position:relative;margin-left:4px}
+.hentry::before{content:"";position:absolute;left:-4.5px;top:13px;width:7px;height:7px;border-radius:50%;
+  background:var(--bg);border:2px solid var(--line2)}
+.hentry.key::before{border-color:var(--warn);background:var(--warn)}
+.hentry.live::before{border-color:var(--acc);background:var(--acc)}
+.hts{flex:0 0 92px;font-size:11px;color:var(--dim);padding-top:1px;font-family:ui-monospace,monospace}
+.ht{flex:1;font-size:12.5px;color:var(--mut)}
+.hentry.key .ht{color:var(--text)}
+.optcard{
+  border:1px solid var(--line2);border-radius:10px;padding:13px 15px;margin-bottom:10px;
+  background:var(--bg3);transition:border-color .15s,transform .15s;
+}
+.optcard:hover{border-color:var(--acc)}
+.optcard b{display:block;font-size:13px;margin-bottom:3px}
+.optcard .od{color:var(--mut);font-size:12px;margin-bottom:10px}
+.commit{
+  padding:6px 14px;border-radius:6px;font-size:12.5px;font-weight:600;color:#dbeafe;
+  background:var(--acc2);transition:background .15s;
+}
+.commit:hover{background:var(--acc)}
+.resolvedbox{
+  border:1px solid #2a5741;background:#12281e;border-radius:10px;padding:13px 16px;margin:14px 0;
+  color:var(--ok);font-size:13px;
+}
+.resolvedbox small{display:block;color:#6d9a83;margin-top:3px;font-size:11.5px}
+
+/* ---------- toast ---------- */
+#toasts{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:90;
+  display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none}
+.toast{
+  background:var(--bg3);border:1px solid var(--line2);border-radius:9px;padding:9px 16px;
+  font-size:12.5px;color:var(--text);box-shadow:0 10px 30px rgba(0,0,0,.5);
+  animation:tin .25s ease;display:flex;gap:9px;align-items:center;
+}
+.toast .tdot{width:7px;height:7px;border-radius:50%;background:var(--acc)}
+.toast.out{opacity:0;transform:translateY(8px);transition:all .3s}
+@keyframes tin{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+
+/* ---------- capture modal ---------- */
+#capov{position:fixed;inset:0;background:rgba(5,9,18,.6);z-index:80;display:none;
+  align-items:flex-start;justify-content:center;padding-top:16vh;backdrop-filter:blur(2px)}
+#capbox{width:560px;max-width:92vw;background:var(--bg3);border:1px solid var(--line2);
+  border-radius:12px;box-shadow:0 24px 70px rgba(0,0,0,.6);overflow:hidden;
+  animation:slidein .2s ease}
+#capbox header{padding:11px 16px;font-size:11px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--dim);border-bottom:1px solid var(--line);display:flex;justify-content:space-between}
+#capin{width:100%;background:transparent;border:0;outline:0;color:var(--text);
+  font:14px/1.4 inherit;padding:15px 16px;resize:none;font-family:inherit}
+#capin::placeholder{color:var(--dim)}
+#capbox footer{padding:9px 16px;border-top:1px solid var(--line);display:flex;
+  justify-content:space-between;align-items:center;color:var(--dim);font-size:11.5px}
+
+/* ---------- hint / compare panels ---------- */
+.float{
+  position:fixed;right:14px;bottom:14px;z-index:70;display:flex;flex-direction:column;
+  align-items:flex-end;gap:8px;
+}
+.fbtn{
+  padding:6px 12px;border-radius:20px;font-size:11.5px;color:var(--mut);
+  background:var(--bg3);border:1px solid var(--line2);box-shadow:0 6px 20px rgba(0,0,0,.35);
+  transition:all .15s;
+}
+.fbtn:hover{color:var(--text);border-color:var(--acc)}
+.fpanel{
+  width:330px;background:var(--bg3);border:1px solid var(--line2);border-radius:12px;
+  box-shadow:0 18px 50px rgba(0,0,0,.55);padding:14px 16px;font-size:12px;color:var(--mut);
+  display:none;animation:slidein .2s ease;
+}
+.fpanel h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);margin-bottom:8px}
+.fpanel ol{margin:0 0 4px 16px;display:flex;flex-direction:column;gap:7px}
+.fpanel li b{color:var(--text);font-weight:600}
+.fpanel .sw{margin-top:10px}
+.fpanel .sw:first-of-type{margin-top:0}
+.fpanel ul{margin:4px 0 0 15px;display:flex;flex-direction:column;gap:3px}
+.fpanel .plus{color:var(--ok)} .fpanel .minus{color:var(--bad)}
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <div class="logo">⌲</div>
+  <b>Inbox / Triage</b>
+  <span class="why">— everything arrives as mail: one stream, one small triage decision per item, context rebuilt by reading.</span>
+  <span class="sp"></span>
+  <button class="tbtn" id="simbtn" onclick="simulateReport(false)">▶ simulate agent report</button>
+  <button class="tbtn primary" onclick="captureOpen()">＋ Capture <span style="opacity:.65;font-weight:400">c</span></button>
+  <a href="index.html">← all paradigms</a>
+</div>
+
+<div id="app">
+  <nav id="nav">
+    <div class="navhead">Contexts</div>
+    <div id="ctxlist"></div>
+    <div class="navfoot">
+      <span class="kbd">c</span> capture &nbsp;<span class="kbd">j</span>/<span class="kbd">k</span> move &nbsp;<span class="kbd">e</span> done
+    </div>
+  </nav>
+
+  <section id="list">
+    <div id="listhead"><b id="lhtitle">Inbox</b><span class="n" id="lhcount"></span></div>
+    <div id="items"></div>
+    <div id="zero"><div class="big">☀</div><b>Inbox zero</b>Every item triaged. Nothing owes you attention here.</div>
+  </section>
+
+  <section id="read">
+    <div id="readempty"><div class="big">⌲</div>Select an item to read it.<br><span style="font-size:11.5px">Unread items are bold — start at the top.</span></div>
+    <div id="readwrap">
+      <div id="actions">
+        <button class="abtn" onclick="assignToggle(event)">▣ Assign to…</button>
+        <button class="abtn" onclick="snoozeItem()">◷ Snooze</button>
+        <button class="abtn" onclick="doneItem()">✓ Done</button>
+        <button class="abtn" onclick="flagDecision()">⚑ Needs decision</button>
+        <div id="assignmenu"></div>
+      </div>
+      <div id="msg"></div>
+    </div>
+  </section>
+</div>
+
+<div id="capov" onmousedown="if(event.target===this)captureClose()">
+  <div id="capbox">
+    <header><span>Quick capture</span><span>lands in Unsorted — file it later</span></header>
+    <textarea id="capin" rows="3" placeholder="Type a thought and press Enter…"></textarea>
+    <footer><span><b style="color:var(--mut)">Enter</b> save · <b style="color:var(--mut)">Esc</b> cancel</span>
+      <button class="tbtn primary" onclick="captureSubmit()">Capture</button></footer>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+<div class="float">
+  <div class="fpanel" id="hints">
+    <h3>Try the workflows</h3>
+    <ol>
+      <li><b>Capture</b> — press <span class="kbd">c</span> or the ＋ Capture button, type anything. It lands unread in <b>Unsorted</b> at the top of the inbox, unclassified.</li>
+      <li><b>Agent report</b> — click <b>▶ simulate agent report</b> in the top bar (or wait ~8s). A new unread item from packet-tracer arrives; your reading pane is untouched.</li>
+      <li><b>Orient &amp; decide</b> — open the <b>“Gate desync fix”</b> item (⚑ decision, in Albion / Inbox). The reading pane stitches the full history into one brief; commit at the bottom.</li>
+    </ol>
+    <div style="color:var(--dim);margin-top:8px">Bonus: triage items with Assign / Snooze / Done and ride the inbox down to zero.</div>
+  </div>
+  <div class="fpanel" id="compare">
+    <div class="sw"><h3 class="plus">Strengths</h3><ul>
+      <li>One familiar triage muscle — nothing (report, thought, decision) can slip past you unseen.</li>
+      <li>Unread counts show exactly where attention is owed; inbox zero is a real, reachable “done”.</li>
+      <li>Reading pane forces one-thing-at-a-time focus; the decision brief reads like a letter.</li>
+    </ul></div>
+    <div class="sw"><h3 class="minus">Weaknesses</h3><ul>
+      <li>Flattens all projects into one stream — no spatial or structural memory.</li>
+      <li>Rewards clearing items over actually re-orienting; “done” ≠ understood.</li>
+      <li>Cross-project overview requires clicking contexts one by one.</li>
+    </ul></div>
+  </div>
+  <div style="display:flex;gap:8px">
+    <button class="fbtn" onclick="togglePanel('hints')">✦ Try the workflows</button>
+    <button class="fbtn" onclick="togglePanel('compare')">ⓘ compare</button>
+  </div>
+</div>
+
+<script>
+const WORLD = {
+  now: "2026-08-22T14:30:00",
+  projects: [
+    { id: "albion", name: "Albion Automation", color: "#e0a458",
+      status: "active", goal: "Fully autonomous gathering + market loop",
+      agents: [
+        { id: "packet-tracer", name: "packet-tracer", state: "working",
+          task: "Instrument gate transition packets", lastReport: "12:41" },
+        { id: "navigator", name: "navigator", state: "blocked",
+          task: "Cross-map routing through gates", lastReport: "11:58",
+          blockedOn: "decision-gate-desync" },
+        { id: "market-bot", name: "market-bot", state: "idle",
+          task: "Waiting on price feed refactor", lastReport: "09:12" }
+      ],
+      tasks: [
+        { t: "Fix gate desync", state: "blocked" },
+        { t: "Price feed refactor", state: "todo" },
+        { t: "Resource route optimizer", state: "done" }
+      ]},
+    { id: "homelab", name: "Homelab Migration", color: "#6fb3d2",
+      status: "active", goal: "Move all services from old NUC to Proxmox cluster",
+      agents: [
+        { id: "infra-agent", name: "infra-agent", state: "working",
+          task: "Migrating Postgres volumes to new ZFS pool", lastReport: "14:07" }
+      ],
+      tasks: [
+        { t: "Migrate Postgres volumes", state: "doing" },
+        { t: "Move reverse proxy + certs", state: "todo" },
+        { t: "Decommission old NUC", state: "todo" }
+      ]},
+    { id: "paper", name: "Anomaly Detection Paper", color: "#b58ee0",
+      status: "deadline", goal: "Submit to conference — deadline Sep 5",
+      agents: [],
+      tasks: [
+        { t: "Rerun eval on v2 dataset", state: "doing" },
+        { t: "Write related-work section", state: "todo" },
+        { t: "Address advisor comments", state: "blocked" }
+      ]},
+    { id: "apartment", name: "Apartment Hunt", color: "#7fc98a",
+      status: "background", goal: "Find 2br under budget before Nov",
+      agents: [],
+      tasks: [
+        { t: "Visit Riverside listing", state: "todo" },
+        { t: "Compare commute times", state: "todo" }
+      ]}
+  ],
+  captures: [
+    { t: "idea: agents should emit confidence with every status report", ts: "13:22" },
+    { t: "check if ZFS snapshot schedule survives migration", ts: "10:45" },
+    { t: "landlord mentioned garage option?? follow up", ts: "yesterday" }
+  ],
+  events: [
+    { ts: "09:12", proj: "albion", agent: "market-bot", kind: "status", t: "Paused: price feed schema changed upstream, refactor needed" },
+    { ts: "10:03", proj: "paper", kind: "note", t: "Advisor replied: eval section needs v2 dataset numbers" },
+    { ts: "10:45", proj: null, kind: "capture", t: "check if ZFS snapshot schedule survives migration" },
+    { ts: "11:20", proj: "albion", agent: "packet-tracer", kind: "status", t: "Gate-probe run #2: emitted 1 move, restarted client — server position UNCHANGED" },
+    { ts: "11:58", proj: "albion", agent: "navigator", kind: "blocked", t: "Blocked: cannot route through gates until desync strategy chosen" },
+    { ts: "12:41", proj: "albion", agent: "packet-tracer", kind: "status", t: "Gate-probe run #3: same result. Server never applied any move after gate transition" },
+    { ts: "13:22", proj: null, kind: "capture", t: "idea: agents should emit confidence with every status report" },
+    { ts: "14:07", proj: "homelab", agent: "infra-agent", kind: "status", t: "Postgres volume 2/5 migrated, ETA 40m for remainder" }
+  ],
+  decisions: [
+    { id: "decision-gate-desync", proj: "albion", state: "pending",
+      title: "Gate desync fix: restart-probe vs re-handshake",
+      options: ["Restart-probe: auto-restart client after each gate to resync",
+                "Re-handshake: reverse-engineer and replay the gate handshake packets"],
+      due: "today" },
+    { id: "decision-eval-scope", proj: "paper", state: "pending",
+      title: "Eval scope: rerun full grid or only v2 delta",
+      options: ["Full grid (2 days compute)", "v2 delta only (4h, weaker claim)"],
+      due: "Aug 25" }
+  ],
+  decisionContext: [
+    { ts: "Aug 19 16:10", t: "navigator first reported chars 'rubber-banding' to gate entrance after transitions" },
+    { ts: "Aug 19 18:34", t: "hypothesis 1: movement-lock flag not cleared — DISPROVEN (flag clears in packet trace)" },
+    { ts: "Aug 20 11:02", t: "hypothesis 2: reliable-seq collision after zone load — DISPROVEN (seqs contiguous)" },
+    { ts: "Aug 20 15:47", t: "key insight: all movement after gate is client-side prediction; server acks contain no position echo" },
+    { ts: "Aug 21 12:30", t: "restart experiment: emit 1 move, restart client, read authoritative resume position → server never moved the char" },
+    { ts: "Aug 21 12:55", t: "conclusion: server drops move stream after gate until a fresh handshake occurs. Two viable fixes identified" },
+    { ts: "Aug 22 12:41", t: "packet-tracer run #3 confirms: reproducible 3/3 times" }
+  ],
+  incomingReport: { ts: "14:31", proj: "albion", agent: "packet-tracer", kind: "status",
+    t: "Gate-probe run #4 complete: server pos unchanged after 3 moves — desync confirmed at handshake layer" }
+};
+
+/* ================= state ================= */
+let seq = 0;
+const items = [];               // chronological, oldest first; rendered reversed
+let selId = null, filterCtx = "all", reportFired = false;
+
+function P(id){ return WORLD.projects.find(p=>p.id===id) }
+function mkItem(o){
+  const it = Object.assign({id:"i"+(++seq), unread:true, archived:false, snoozed:false, flagged:false}, o);
+  items.push(it); return it;
+}
+
+function buildItems(){
+  mkItem({ts:"yesterday", proj:null, kind:"capture", t:"landlord mentioned garage option?? follow up", unread:false});
+  for(const e of WORLD.events){
+    mkItem({ts:e.ts, proj:e.proj, agent:e.agent||null, kind:e.kind, t:e.t,
+      unread: e.ts >= "11:00"});
+  }
+  for(const d of WORLD.decisions){
+    mkItem({ts:"due "+d.due, proj:d.proj, kind:"decision", t:d.title, dec:d, unread:true});
+  }
+}
+
+/* ================= render: nav ================= */
+function unreadCount(ctx){
+  return items.filter(i=>!i.archived && !i.snoozed && i.unread &&
+    (ctx==="all" ? true : ctx==="unsorted" ? i.proj===null : i.proj===ctx)).length;
+}
+function renderContexts(){
+  const el = document.getElementById("ctxlist");
+  const row = (id,color,name,sub)=>{
+    const n = unreadCount(id);
+    return `<button class="ctx ${filterCtx===id?"sel":""}" onclick="setFilter('${id}')">
+      <span class="cdot" style="background:${color}"></span>
+      <span class="cname">${name}${sub?`<span class="sub">${sub}</span>`:""}</span>
+      <span class="cnt ${n?"":"zero"}">${n||"–"}</span></button>`;
+  };
+  let h = row("all","var(--acc)","Inbox","everything, newest first");
+  h += `<div class="navhead" style="margin-top:8px">Projects</div>`;
+  for(const p of WORLD.projects){
+    const ag = p.agents.length ? `${p.agents.length} agent${p.agents.length>1?"s":""} · ${p.status}` : p.status;
+    h += row(p.id, p.color, p.name, ag);
+  }
+  h += `<div class="navhead" style="margin-top:8px">Loose</div>`;
+  h += row("unsorted","#5c6f8c","Unsorted","captures awaiting a home");
+  el.innerHTML = h;
+}
+
+/* ================= render: list ================= */
+function visibleItems(){
+  return items.filter(i=>!i.archived && !i.snoozed &&
+    (filterCtx==="all" ? true : filterCtx==="unsorted" ? i.proj===null : i.proj===filterCtx))
+    .slice().reverse();
+}
+function fromLabel(i){
+  if(i.kind==="capture") return "you · quick capture";
+  if(i.kind==="decision") return "decision due · "+(P(i.proj)?.name||"");
+  if(i.agent) return i.agent+" · "+(P(i.proj)?.name||"");
+  return P(i.proj)?.name||"note";
+}
+function tagsFor(i){
+  let h = "";
+  if(i.kind==="decision") h += i.dec.state==="resolved" ? `<span class="tag res">✓ resolved</span>` : `<span class="tag dec">⚑ decision · due ${i.dec.due}</span>`;
+  if(i.kind==="blocked") h += `<span class="tag blk">blocked</span>`;
+  if(i.kind==="capture") h += `<span class="tag cap">unsorted</span>`;
+  if(i.kind==="status") h += `<span class="tag">agent report</span>`;
+  if(i.flagged) h += `<span class="tag flag">⚑ needs decision</span>`;
+  if(i.proj && filterCtx==="all") h += `<span class="tag proj">${P(i.proj).name}</span>`;
+  return h;
+}
+function renderList(){
+  const vis = visibleItems();
+  const el = document.getElementById("items");
+  document.getElementById("zero").style.display = vis.length ? "none" : "block";
+  document.getElementById("lhtitle").textContent =
+    filterCtx==="all" ? "Inbox" : filterCtx==="unsorted" ? "Unsorted" : P(filterCtx).name;
+  const u = unreadCount(filterCtx);
+  document.getElementById("lhcount").textContent = vis.length ? `${vis.length} items · ${u} unread` : "";
+  el.innerHTML = vis.map(i=>`
+    <button class="item ${i.unread?"":"read"} ${i.id===selId?"sel":""} ${i.justNew?"new":""}"
+        id="row-${i.id}" onclick="openItem('${i.id}')">
+      <span class="udot"></span>
+      <span class="ibody">
+        <span class="irow1"><span class="ifrom">${fromLabel(i)}</span><span class="its">${i.ts}</span></span>
+        <div class="isnip">${i.t}</div>
+        <div class="itags">${tagsFor(i)}</div>
+      </span>
+    </button>`).join("");
+  vis.forEach(i=>i.justNew=false);
+  renderContexts();
+}
+function setFilter(id){ filterCtx=id; renderList(); }
+
+/* ================= render: reading pane ================= */
+function openItem(id){
+  const i = items.find(x=>x.id===id); if(!i) return;
+  selId = id; i.unread = false;
+  document.getElementById("readempty").style.display="none";
+  document.getElementById("readwrap").style.display="flex";
+  document.getElementById("assignmenu").style.display="none";
+  if(i.kind==="decision") openDecision(i); else renderMessage(i);
+  renderList();
+  document.getElementById("msg").scrollTop = 0;
+}
+function avatar(name,color){
+  const init = name.split(/[-\s]/).map(w=>w[0]).join("").slice(0,2).toUpperCase();
+  return `<span class="av" style="background:${color}">${init}</span>`;
+}
+function renderMessage(i){
+  const p = i.proj ? P(i.proj) : null;
+  const who = i.kind==="capture" ? "you" : (i.agent || (p?p.name:"note"));
+  const col = p ? p.color : "#7b8aa3";
+  let extra = "";
+  if(i.agent && p){
+    const ag = p.agents.find(a=>a.id===i.agent);
+    if(ag) extra = `<dl class="kv"><dt>Agent state</dt><dd>${ag.state}${ag.blockedOn?" — waiting on your call":""}</dd>
+      <dt>Current task</dt><dd>${ag.task}</dd><dt>Last report</dt><dd>${ag.lastReport}</dd>
+      <dt>Project goal</dt><dd>${p.goal}</dd></dl>`;
+  }
+  if(i.kind==="capture") extra = `<p class="quiet">Captured without a context. Use <b>▣ Assign to…</b> above when you know where it belongs — or leave it; Unsorted is allowed to exist.</p>`;
+  document.getElementById("msg").innerHTML = `
+    <div class="mhead">
+      <h1>${i.t}</h1>
+      <div class="metaline">${avatar(who,col)}<b style="color:var(--text)">${who}</b>
+        ${p?`· <span style="color:${p.color}">${p.name}</span>`:"· unsorted"} · ${i.ts}
+        ${i.kind==="blocked"?`· <span class="tag blk">blocked</span>`:""}</div>
+    </div>
+    <div class="mbody"><p>${i.t}.</p>${extra}</div>`;
+}
+
+/* ================= workflow 3: orient for decision ================= */
+function decisionHistory(dec){
+  // stitch decisionContext + related live events into one chronological sequence
+  const h = WORLD.decisionContext.map(e=>({ts:e.ts, t:e.t,
+    key:/key insight|conclusion/.test(e.t)}));
+  h.splice(6,0,{ts:"Aug 22 11:58", t:"navigator went BLOCKED: cannot route through gates until a strategy is chosen", key:false});
+  if(reportFired) h.push({ts:"Aug 22 14:31", t:"packet-tracer run #4: server pos unchanged after 3 moves — desync confirmed at handshake layer", live:true});
+  return h;
+}
+function openDecision(i){
+  const d = i.dec;
+  if(d.id!=="decision-gate-desync"){ renderGenericDecision(i); return; }
+  const hist = decisionHistory(d).map(e=>`
+    <div class="hentry ${e.key?"key":""} ${e.live?"live":""}">
+      <span class="hts">${e.ts}</span><span class="ht">${e.t}</span></div>`).join("");
+  const resolved = d.state==="resolved";
+  const commit = resolved
+    ? `<div class="resolvedbox">✓ Committed: <b>${d.choice}</b><small>Logged ${d.resolvedAt} · navigator unblocked · packet-tracer notified</small></div>`
+    : `<div class="bsec">Where this leaves you</div>
+       <div class="optcard"><b>Option A — Restart-probe</b>
+         <div class="od">Auto-restart the client after each gate to force a fresh handshake. Crude but proven by the Aug 21 experiment; costs ~3 min per gate.</div>
+         <button class="commit" onclick="commitDecision('decision-gate-desync',0)">Choose restart-probe</button></div>
+       <div class="optcard"><b>Option B — Re-handshake</b>
+         <div class="od">Reverse-engineer and replay the gate handshake packets in-session. Clean and fast at runtime, but the handshake layer is unmapped — research cost unknown.</div>
+         <button class="commit" onclick="commitDecision('decision-gate-desync',1)">Choose re-handshake</button></div>`;
+  document.getElementById("msg").innerHTML = `
+    <div class="mhead">
+      <h1>${d.title}</h1>
+      <div class="metaline">${avatar("decision","#f0b45c")}<b style="color:var(--text)">Decision brief</b>
+        · <span style="color:${P(d.proj).color}">${P(d.proj).name}</span> · due ${d.due}
+        ${resolved?`· <span class="tag res">✓ resolved</span>`:`· <span class="tag blk">blocking navigator</span>`}</div>
+    </div>
+    <div class="mbody brief">
+      <p class="salut">Everything you knew, stitched back together so you can decide in one read — three days of investigation, seven entries, two disproven hypotheses, one confirmed cause.</p>
+      <div class="bsec">The full history</div>
+      ${hist}
+      ${commit}
+      <p class="quiet" style="margin-top:14px">Source: decision log + related Albion events, oldest first. Amber dots mark turning points${reportFired?"; blue is live from today":""}.</p>
+    </div>`;
+}
+function renderGenericDecision(i){
+  const d = i.dec;
+  document.getElementById("msg").innerHTML = `
+    <div class="mhead"><h1>${d.title}</h1>
+      <div class="metaline">${avatar("decision","#f0b45c")}<b style="color:var(--text)">Decision</b>
+      · <span style="color:${P(d.proj).color}">${P(d.proj).name}</span> · due ${d.due}</div></div>
+    <div class="mbody"><p class="quiet">Options on the table:</p>
+      ${d.options.map(o=>`<div class="optcard"><b>${o.split(":")[0]}</b><div class="od">${o}</div></div>`).join("")}
+      <p class="quiet">No accumulated brief for this one yet — context builds as events arrive.</p></div>`;
+}
+function commitDecision(decId, optIdx){
+  const d = WORLD.decisions.find(x=>x.id===decId);
+  if(!d || d.state==="resolved") return;
+  d.state = "resolved";
+  d.choice = d.options[optIdx].split(":")[0];
+  d.resolvedAt = "14:32";
+  const nav = P("albion").agents.find(a=>a.id==="navigator");
+  nav.state = "working"; delete nav.blockedOn;
+  const it = mkItem({ts:"14:32", proj:"albion", kind:"note",
+    t:`Decision committed: ${d.choice} — navigator unblocked, resuming gate routing`});
+  it.justNew = true;
+  const decItem = items.find(x=>x.dec && x.dec.id===decId);
+  if(decItem) openDecision(decItem);
+  renderList();
+  toast(`✓ Committed “${d.choice}” — logged, navigator unblocked`);
+}
+
+/* ================= workflow 1: capture ================= */
+function captureOpen(){
+  document.getElementById("capov").style.display="flex";
+  const inp = document.getElementById("capin"); inp.value=""; inp.focus();
+}
+function captureClose(){ document.getElementById("capov").style.display="none"; }
+function captureSubmit(){
+  const v = document.getElementById("capin").value.trim();
+  if(!v){ captureClose(); return; }
+  const it = mkItem({ts:"14:30", proj:null, kind:"capture", t:v});
+  it.justNew = true;
+  captureClose(); renderList();
+  toast("Captured to Unsorted — file it whenever");
+}
+
+/* ================= workflow 2: simulated agent report ================= */
+function simulateReport(auto){
+  if(reportFired){ if(!auto) toast("packet-tracer has already reported in"); return; }
+  reportFired = true;
+  const r = WORLD.incomingReport;
+  const it = mkItem({ts:r.ts, proj:r.proj, agent:r.agent, kind:r.kind, t:r.t});
+  it.justNew = true;
+  WORLD.events.push(r);
+  P("albion").agents.find(a=>a.id==="packet-tracer").lastReport = r.ts;
+  const b = document.getElementById("simbtn");
+  b.disabled = true; b.textContent = "✓ report arrived";
+  renderList();               // selection + reading pane untouched
+  toast("New report · packet-tracer — gate-probe run #4 complete");
+  // if the decision brief is open, weave the new evidence in live
+  const sel = items.find(x=>x.id===selId);
+  if(sel && sel.kind==="decision" && sel.dec.id==="decision-gate-desync") openDecision(sel);
+}
+
+/* ================= triage actions ================= */
+function cur(){ return items.find(x=>x.id===selId) }
+function assignToggle(ev){
+  ev.stopPropagation();
+  const m = document.getElementById("assignmenu");
+  if(m.style.display==="block"){ m.style.display="none"; return; }
+  m.innerHTML = WORLD.projects.map(p=>
+    `<button onclick="assignTo('${p.id}')"><span class="cdot" style="background:${p.color};width:8px;height:8px;border-radius:3px"></span>${p.name}</button>`).join("")
+    + `<button onclick="assignTo(null)"><span class="cdot" style="background:#5c6f8c;width:8px;height:8px;border-radius:3px"></span>Unsorted</button>`;
+  m.style.display = "block";
+}
+function assignTo(pid){
+  const i = cur(); if(!i) return;
+  i.proj = pid;
+  document.getElementById("assignmenu").style.display="none";
+  renderList();
+  toast(pid ? `Filed under ${P(pid).name}` : "Moved back to Unsorted");
+  openItem(i.id);
+}
+function snoozeItem(){
+  const i = cur(); if(!i) return;
+  i.snoozed = true;
+  fadeOutRow(i, "Snoozed until tomorrow 09:00");
+}
+function doneItem(){
+  const i = cur(); if(!i) return;
+  i.archived = true;
+  fadeOutRow(i, "Done — archived");
+}
+function fadeOutRow(i, msg){
+  const row = document.getElementById("row-"+i.id);
+  const nextSel = pickNext(i.id);
+  if(row){ row.classList.add("gone"); setTimeout(()=>{ afterRemove(nextSel); },260); }
+  else afterRemove(nextSel);
+  toast(msg);
+}
+function pickNext(goneId){
+  const vis = visibleItems().filter(x=>x.id!==goneId);
+  return vis.length ? vis[0].id : null;
+}
+function afterRemove(nextSel){
+  selId = nextSel;
+  renderList();
+  if(nextSel) openItem(nextSel);
+  else{
+    document.getElementById("readwrap").style.display="none";
+    document.getElementById("readempty").style.display="block";
+  }
+}
+function flagDecision(){
+  const i = cur(); if(!i || i.kind==="decision") return;
+  i.flagged = !i.flagged;
+  renderList();
+  toast(i.flagged ? "⚑ Flagged: needs a decision from you" : "Flag removed");
+}
+
+/* ================= chrome ================= */
+function toast(msg){
+  const t = document.createElement("div");
+  t.className="toast"; t.innerHTML=`<span class="tdot"></span>${msg}`;
+  document.getElementById("toasts").appendChild(t);
+  setTimeout(()=>t.classList.add("out"), 3400);
+  setTimeout(()=>t.remove(), 3800);
+}
+function togglePanel(id){
+  for(const pid of ["hints","compare"]){
+    const el = document.getElementById(pid);
+    el.style.display = (pid===id && el.style.display!=="block") ? "block" : "none";
+  }
+}
+document.addEventListener("keydown", e=>{
+  const typing = /TEXTAREA|INPUT/.test(document.activeElement.tagName);
+  if(typing){
+    if(e.key==="Enter" && document.activeElement.id==="capin"){ e.preventDefault(); captureSubmit(); }
+    if(e.key==="Escape") captureClose();
+    return;
+  }
+  if(e.key==="c"){ e.preventDefault(); captureOpen(); }
+  if(e.key==="Escape"){ captureClose(); document.getElementById("assignmenu").style.display="none"; }
+  if(e.key==="e" && selId) doneItem();
+  if(e.key==="j"||e.key==="k"){
+    const vis = visibleItems(); if(!vis.length) return;
+    let ix = vis.findIndex(x=>x.id===selId);
+    ix = ix<0 ? 0 : Math.min(vis.length-1, Math.max(0, ix + (e.key==="j"?1:-1)));
+    openItem(vis[ix].id);
+  }
+});
+document.addEventListener("click", e=>{
+  const m = document.getElementById("assignmenu");
+  if(m.style.display==="block" && !m.contains(e.target)) m.style.display="none";
+});
+
+buildItems();
+renderList();
+setTimeout(()=>simulateReport(true), 8000);
+</script>
+</body>
+</html>

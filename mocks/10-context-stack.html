@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stacked — a context stack</title>
+<style>
+  :root{
+    --bg:#0b0d12; --bg-grad:radial-gradient(1200px 700px at 50% -10%, #141a26 0%, #0b0d12 60%);
+    --card:#151923; --card-hi:#1a1f2c; --card-deep:#10141d;
+    --line:#242a38; --line-soft:#1c2230;
+    --ink:#e6e9f0; --ink-dim:#8b93a7; --ink-faint:#565e72;
+    --focus:#7da9f7; --glow:rgba(125,169,247,.22);
+    --amber:#e8b568; --green:#79c98b; --red:#e08b7d; --purple:#b58ee0;
+    --sans:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    --mono:ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  *{box-sizing:border-box; margin:0; padding:0}
+  html,body{height:100%}
+  body{background:var(--bg); background-image:var(--bg-grad); color:var(--ink);
+    font-family:var(--sans); overflow:hidden; font-size:16px}
+  button{font-family:inherit; cursor:pointer}
+
+  /* top bar */
+  .topbar{position:fixed; inset:0 0 auto 0; height:52px; display:flex; align-items:center; gap:14px;
+    padding:0 20px; z-index:40; background:linear-gradient(180deg, rgba(11,13,18,.95), rgba(11,13,18,.75) 80%, transparent)}
+  .brand{display:flex; align-items:baseline; gap:12px; min-width:0}
+  .brand b{font-size:15px; letter-spacing:.06em; color:var(--focus)}
+  .brand span{font-size:12.5px; color:var(--ink-dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .spacer{flex:1}
+  .tbtn{background:rgba(21,25,35,.8); border:1px solid var(--line); color:var(--ink-dim);
+    border-radius:8px; font-size:12.5px; padding:6px 12px; transition:all .2s}
+  .tbtn:hover{color:var(--ink); border-color:var(--focus); box-shadow:0 0 14px var(--glow)}
+  .tbtn.primary{color:#0b0d12; background:var(--focus); border-color:var(--focus); font-weight:600}
+  a.backlink{font-size:12px; color:var(--ink-faint); text-decoration:none}
+  a.backlink:hover{color:var(--ink-dim)}
+  kbd{font-family:var(--mono); font-size:10.5px; background:rgba(0,0,0,.3); border:1px solid var(--line);
+    border-radius:4px; padding:1px 5px}
+
+  /* stack */
+  .stage{height:100%; display:flex; flex-direction:column; padding:66px 20px 0; overflow:hidden}
+  .stack{flex:1; overflow-y:auto; scrollbar-width:none; display:flex; flex-direction:column;
+    align-items:center; padding:10px 0 30px}
+  .stack::-webkit-scrollbar{display:none}
+
+  .card{width:min(720px, 94vw); background:linear-gradient(180deg, var(--card-hi), var(--card));
+    border:1px solid var(--line); border-radius:18px; flex-shrink:0;
+    transition:transform .45s cubic-bezier(.3,1,.35,1), box-shadow .45s, opacity .45s;
+    position:relative}
+  .card.top{box-shadow:0 30px 80px rgba(0,0,0,.6), 0 0 0 1px rgba(125,169,247,.14), 0 0 50px rgba(125,169,247,.05);
+    z-index:10}
+  .card.peek{margin-top:-6px; cursor:pointer; overflow:hidden;
+    background:linear-gradient(180deg, #131722, var(--card-deep))}
+  .card.peek:nth-of-type(2){z-index:6; transform:scale(.965)}
+  .card.peek:nth-of-type(3){z-index:5; transform:scale(.93); opacity:.85}
+  .card.peek:nth-of-type(4){z-index:4; transform:scale(.895); opacity:.7}
+  .card.peek:hover{transform:scale(.985) translateY(-3px); opacity:1; border-color:#31394d;
+    box-shadow:0 18px 50px rgba(0,0,0,.5)}
+  .card.rising{animation:rise .55s cubic-bezier(.25,1,.35,1)}
+  @keyframes rise{0%{transform:translateY(26px) scale(.955); opacity:.55} 100%{transform:none; opacity:1}}
+  .card.popping{animation:popout .4s ease-in forwards}
+  @keyframes popout{100%{transform:translateY(-46px) scale(.96); opacity:0}}
+  .card.reportglow{animation:rptglow 2.6s ease-out}
+  @keyframes rptglow{0%{box-shadow:0 0 0 1px var(--amber), 0 0 44px rgba(232,181,104,.35)}
+    100%{box-shadow:none}}
+
+  .card-head{display:flex; align-items:center; gap:12px; padding:18px 24px}
+  .card.top .card-head{padding:24px 30px 6px}
+  .pdot{width:11px; height:11px; border-radius:50%; flex-shrink:0; box-shadow:0 0 10px currentColor}
+  .card-title{font-size:19px; font-weight:600; letter-spacing:-.01em}
+  .card.top .card-title{font-size:25px}
+  .depth{font-family:var(--mono); font-size:10.5px; color:var(--ink-faint); letter-spacing:.06em}
+  .chgbadge{font-size:11.5px; font-weight:600; color:var(--amber); background:rgba(232,181,104,.12);
+    border:1px solid rgba(232,181,104,.3); padding:2px 9px; border-radius:11px; white-space:nowrap;
+    transition:transform .3s}
+  .chgbadge.zero{color:var(--ink-faint); background:none; border-color:var(--line-soft)}
+  .chgbadge.bump{animation:bump 1.8s ease-out}
+  @keyframes bump{0%{transform:scale(1.35); box-shadow:0 0 22px rgba(232,181,104,.5)}
+    100%{transform:none; box-shadow:none}}
+  .decchip{font-size:11.5px; font-weight:600; padding:2px 10px; border-radius:11px; white-space:nowrap;
+    color:var(--red); background:rgba(224,139,125,.1); border:1px solid rgba(224,139,125,.35); cursor:pointer;
+    transition:all .2s}
+  .decchip:hover{background:rgba(224,139,125,.22); box-shadow:0 0 14px rgba(224,139,125,.25)}
+  .decchip.resolved{color:var(--green); background:rgba(121,201,139,.1); border-color:rgba(121,201,139,.35); cursor:default}
+  .peek-sub{padding:0 24px 16px; font-size:13px; color:var(--ink-faint)}
+
+  /* expanded body */
+  .card-body{padding:8px 30px 26px; display:flex; flex-direction:column; gap:20px}
+  .sect h3{font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--ink-faint);
+    font-weight:600; margin-bottom:9px; display:flex; align-items:baseline; gap:10px}
+  .sect h3 .cnt{color:var(--amber); letter-spacing:0}
+  .leftoff{font-size:16.5px; line-height:1.6; color:var(--ink)}
+  .leftoff .when{color:var(--ink-faint); font-size:13px; margin-left:6px}
+  .chg-item{display:flex; gap:12px; padding:7px 0; font-size:14.5px; line-height:1.5;
+    border-bottom:1px solid var(--line-soft); align-items:baseline}
+  .chg-item:last-child{border-bottom:none}
+  .chg-item .ts{font-family:var(--mono); font-size:11px; color:var(--ink-faint); min-width:44px}
+  .chg-item .who{font-family:var(--mono); font-size:12px; color:var(--focus)}
+  .chg-item.fresh{animation:freshin 1.8s ease-out}
+  @keyframes freshin{0%{background:rgba(232,181,104,.18); border-radius:6px} 100%{background:transparent}}
+  .chg-item.deci{color:var(--green)}
+  .quiet{font-size:14px; color:var(--ink-faint); font-style:italic}
+  .agent-row{display:flex; gap:10px; flex-wrap:wrap}
+  .agent-pill{display:flex; align-items:center; gap:8px; font-size:13px; background:rgba(0,0,0,.22);
+    border:1px solid var(--line-soft); border-radius:20px; padding:5px 13px}
+  .agent-pill .nm{font-family:var(--mono); font-size:12.5px}
+  .adot{width:7px; height:7px; border-radius:50%}
+  .adot.working{background:var(--green); box-shadow:0 0 8px var(--green); animation:pulse 2s infinite}
+  .adot.blocked{background:var(--red)} .adot.idle{background:var(--ink-faint)}
+  .adot.ready{background:var(--focus); box-shadow:0 0 8px var(--focus)}
+  @keyframes pulse{50%{opacity:.4}}
+  .next-item{display:flex; gap:10px; padding:5px 0; font-size:15px; align-items:baseline}
+  .next-item .bx{font-family:var(--mono); font-size:12px; color:var(--ink-faint); width:24px}
+  .next-item.doing .bx{color:var(--amber)} .next-item.blockedt .bx{color:var(--red)}
+  .card-actions{display:flex; gap:10px; padding:0 30px 24px}
+  .cbtn{background:rgba(0,0,0,.25); border:1px solid var(--line); color:var(--ink-dim); font-size:12.5px;
+    border-radius:8px; padding:7px 14px; transition:all .2s}
+  .cbtn:hover{color:var(--ink); border-color:var(--focus)}
+
+  /* briefing (step reveal) */
+  .briefing{margin-top:4px; border:1px solid rgba(224,139,125,.3); border-radius:14px;
+    background:rgba(0,0,0,.25); padding:20px 22px}
+  .briefing h4{font-size:15px; color:var(--ink); margin-bottom:4px}
+  .briefing .b-sub{font-size:12.5px; color:var(--ink-dim); margin-bottom:16px}
+  .b-step{display:flex; gap:14px; padding:7px 0; font-size:14.5px; line-height:1.55;
+    opacity:0; animation:stepin .55s ease-out forwards}
+  @keyframes stepin{0%{opacity:0; transform:translateY(9px)} 100%{opacity:1; transform:none}}
+  .b-step .ts{font-family:var(--mono); font-size:10.5px; color:var(--ink-faint); min-width:84px; padding-top:4px}
+  .b-step.hot .tx{color:var(--amber)}
+  .b-step.concl .tx{font-weight:600}
+  .b-opts{display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:16px;
+    opacity:0; animation:stepin .55s ease-out forwards}
+  .b-opt{border:1px solid var(--line); border-radius:11px; padding:14px; background:var(--card-hi);
+    display:flex; flex-direction:column; gap:11px}
+  .b-opt p{font-size:13.5px; line-height:1.5; color:var(--ink-dim)}
+  .b-opt p b{color:var(--ink)}
+  .b-opt button{background:var(--focus); color:#0b0d12; border:none; border-radius:8px; font-weight:700;
+    font-size:12.5px; padding:8px 12px; transition:filter .15s}
+  .b-opt button:hover{filter:brightness(1.12)}
+
+  /* shelf */
+  .shelf{flex-shrink:0; display:flex; align-items:center; gap:12px; padding:14px 6px 18px;
+    justify-content:center; flex-wrap:wrap}
+  .shelf-label{font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-faint)}
+  .shelf-item{display:flex; align-items:center; gap:9px; font-size:13.5px; color:var(--ink-dim);
+    background:rgba(21,25,35,.7); border:1px solid var(--line); border-radius:22px; padding:8px 16px;
+    cursor:pointer; transition:all .25s}
+  .shelf-item:hover{color:var(--ink); border-color:var(--focus); transform:translateY(-3px);
+    box-shadow:0 8px 24px rgba(0,0,0,.4)}
+  .shelf-item .sdot{width:8px; height:8px; border-radius:50%}
+  .shelf-item .push{font-size:11px; color:var(--ink-faint)}
+  .shelf-item.inboxchip{border-style:dashed}
+  .shelf-item.pulse{animation:inbpulse 1.6s ease-out}
+  @keyframes inbpulse{0%{box-shadow:0 0 0 3px rgba(181,142,224,.5)} 100%{box-shadow:none}}
+
+  /* capture overlay */
+  .veil{position:fixed; inset:0; background:rgba(5,7,10,.6); backdrop-filter:blur(3px); z-index:70;
+    display:none; align-items:flex-start; justify-content:center; padding-top:22vh}
+  .veil.open{display:flex}
+  .cap-box{width:min(600px, 90vw); background:var(--card-hi); border:1px solid var(--focus);
+    border-radius:16px; padding:22px 26px; box-shadow:0 40px 100px rgba(0,0,0,.7), 0 0 40px var(--glow);
+    animation:rise .35s cubic-bezier(.25,1,.35,1)}
+  .cap-box label{font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-faint)}
+  .cap-box input{width:100%; margin-top:10px; background:none; border:none; outline:none;
+    color:var(--ink); font-size:19px; font-family:inherit}
+  .cap-box input::placeholder{color:var(--ink-faint)}
+  .cap-box .cap-hint{margin-top:14px; font-size:11.5px; color:var(--ink-faint)}
+
+  /* inbox popover */
+  .inbox-pop{position:fixed; bottom:74px; left:50%; transform:translateX(-50%); z-index:60;
+    width:min(480px,90vw); background:var(--card-hi); border:1px solid var(--line); border-radius:14px;
+    padding:16px 18px; box-shadow:0 24px 70px rgba(0,0,0,.6); display:none}
+  .inbox-pop.open{display:block}
+  .inbox-pop h4{font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--purple); margin-bottom:10px}
+  .inbox-pop .ci{display:flex; gap:12px; font-size:13.5px; padding:6px 0; border-bottom:1px solid var(--line-soft)}
+  .inbox-pop .ci:last-child{border:none}
+  .inbox-pop .ci .ts{font-family:var(--mono); font-size:10.5px; color:var(--ink-faint); min-width:60px; padding-top:2px}
+
+  /* toast + info panels */
+  .toast{position:fixed; right:22px; bottom:24px; z-index:80; background:var(--card-hi); border:1px solid var(--line);
+    border-left:3px solid var(--focus); border-radius:10px; padding:11px 15px; font-size:12.5px;
+    box-shadow:0 14px 40px rgba(0,0,0,.6); transform:translateY(100px); opacity:0; transition:all .35s}
+  .toast.show{transform:none; opacity:1}
+  .toast .t-sub{font-size:11px; color:var(--ink-dim); margin-top:2px}
+  .panel-pop{position:fixed; top:60px; right:16px; width:330px; z-index:65; background:var(--card-hi);
+    border:1px solid var(--line); border-radius:12px; padding:17px 19px; font-size:12.5px; line-height:1.6;
+    color:var(--ink-dim); box-shadow:0 20px 60px rgba(0,0,0,.6); display:none}
+  .panel-pop.open{display:block}
+  .panel-pop h3{font-size:11.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--focus); margin-bottom:10px}
+  .panel-pop ol{padding-left:18px; display:flex; flex-direction:column; gap:8px}
+  .panel-pop b{color:var(--ink)}
+  .sw{display:grid; grid-template-columns:1fr 1fr; gap:14px}
+  .sw h4{font-size:11px; margin-bottom:6px}
+  .sw ul{padding-left:15px}
+  .sw li{margin-bottom:5px}
+  .good{color:var(--green)} .bad{color:var(--red)}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand"><b>◫ Stacked</b>
+    <span>attention is a stack — push what you're doing, pop when done; every card knows how to resume you</span></div>
+  <div class="spacer"></div>
+  <button class="tbtn primary" id="btnCapture">✎ capture <kbd style="border-color:rgba(0,0,0,.3)">c</kbd></button>
+  <button class="tbtn" id="btnReport">▶ simulate agent report</button>
+  <button class="tbtn" id="btnFlows">Try the workflows</button>
+  <button class="tbtn" id="btnCompare">ⓘ compare</button>
+  <a class="backlink" href="index.html">← all mocks</a>
+</div>
+
+<div class="panel-pop" id="flowsPanel">
+  <h3>Try the workflows</h3>
+  <ol>
+    <li><b>Capture</b> — press <kbd>c</kbd> or the ✎ capture button, type, Enter. It drops into the dashed <b>✎ inbox</b> chip on the shelf — no card, no filing.</li>
+    <li><b>Agent report</b> — click <b>▶ simulate agent report</b> (or wait ~8s). Watch the <b>Albion</b> card lower in the stack: its "changed since" badge bumps and glows. Background work accumulates onto the resume card.</li>
+    <li><b>Orient &amp; decide</b> — click the Albion card to bring it to top (it auto-expands), then click the red <b>⚑ decision</b> chip. The briefing replays step-by-step; commit at the end.</li>
+  </ol>
+</div>
+
+<div class="panel-pop" id="comparePanel">
+  <h3>Paradigm trade-offs</h3>
+  <div class="sw">
+    <div><h4 class="good">Strengths</h4><ul>
+      <li>Matches how attention actually works: one focus, everything else parked with a resume note.</li>
+      <li>"What changed since" makes background agent work legible at a glance.</li>
+      <li>Push/pop is an honest cost signal — a deep stack is visible overload.</li>
+    </ul></div>
+    <div><h4 class="bad">Weaknesses</h4><ul>
+      <li>Only one context fully visible; poor for cross-project comparison.</li>
+      <li>Stack order is a lie if you actually multitask in minutes, not hours.</li>
+      <li>Resume notes need discipline (or an agent) to stay truthful.</li>
+    </ul></div>
+  </div>
+</div>
+
+<div class="stage">
+  <div class="stack" id="stack"></div>
+  <div class="shelf" id="shelf"></div>
+</div>
+
+<div class="inbox-pop" id="inboxPop"></div>
+
+<div class="veil" id="veil">
+  <div class="cap-box">
+    <label>Capture — lands in the inbox, not on the stack</label>
+    <input id="capInput" placeholder="One loose thought…" maxlength="200">
+    <div class="cap-hint">↵ save · esc dismiss · never forces you to pick a project</div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const WORLD = {
+  now: "2026-08-22T14:30:00",
+  projects: [
+    { id: "albion", name: "Albion Automation", color: "#e0a458",
+      status: "active", goal: "Fully autonomous gathering + market loop",
+      agents: [
+        { id: "packet-tracer", name: "packet-tracer", state: "working",
+          task: "Instrument gate transition packets", lastReport: "12:41" },
+        { id: "navigator", name: "navigator", state: "blocked",
+          task: "Cross-map routing through gates", lastReport: "11:58",
+          blockedOn: "decision-gate-desync" },
+        { id: "market-bot", name: "market-bot", state: "idle",
+          task: "Waiting on price feed refactor", lastReport: "09:12" }
+      ],
+      tasks: [
+        { t: "Fix gate desync", state: "blocked" },
+        { t: "Price feed refactor", state: "todo" },
+        { t: "Resource route optimizer", state: "done" }
+      ]},
+    { id: "homelab", name: "Homelab Migration", color: "#6fb3d2",
+      status: "active", goal: "Move all services from old NUC to Proxmox cluster",
+      agents: [
+        { id: "infra-agent", name: "infra-agent", state: "working",
+          task: "Migrating Postgres volumes to new ZFS pool", lastReport: "14:07" }
+      ],
+      tasks: [
+        { t: "Migrate Postgres volumes", state: "doing" },
+        { t: "Move reverse proxy + certs", state: "todo" },
+        { t: "Decommission old NUC", state: "todo" }
+      ]},
+    { id: "paper", name: "Anomaly Detection Paper", color: "#b58ee0",
+      status: "deadline", goal: "Submit to conference — deadline Sep 5",
+      agents: [],
+      tasks: [
+        { t: "Rerun eval on v2 dataset", state: "doing" },
+        { t: "Write related-work section", state: "todo" },
+        { t: "Address advisor comments", state: "blocked" }
+      ]},
+    { id: "apartment", name: "Apartment Hunt", color: "#7fc98a",
+      status: "background", goal: "Find 2br under budget before Nov",
+      agents: [],
+      tasks: [
+        { t: "Visit Riverside listing", state: "todo" },
+        { t: "Compare commute times", state: "todo" }
+      ]}
+  ],
+  captures: [
+    { t: "idea: agents should emit confidence with every status report", ts: "13:22" },
+    { t: "check if ZFS snapshot schedule survives migration", ts: "10:45" },
+    { t: "landlord mentioned garage option?? follow up", ts: "yesterday" }
+  ],
+  events: [
+    { ts: "09:12", proj: "albion", agent: "market-bot", kind: "status", t: "Paused: price feed schema changed upstream, refactor needed" },
+    { ts: "10:03", proj: "paper", kind: "note", t: "Advisor replied: eval section needs v2 dataset numbers" },
+    { ts: "10:45", proj: null, kind: "capture", t: "check if ZFS snapshot schedule survives migration" },
+    { ts: "11:20", proj: "albion", agent: "packet-tracer", kind: "status", t: "Gate-probe run #2: emitted 1 move, restarted client — server position UNCHANGED" },
+    { ts: "11:58", proj: "albion", agent: "navigator", kind: "blocked", t: "Blocked: cannot route through gates until desync strategy chosen" },
+    { ts: "12:41", proj: "albion", agent: "packet-tracer", kind: "status", t: "Gate-probe run #3: same result. Server never applied any move after gate transition" },
+    { ts: "13:22", proj: null, kind: "capture", t: "idea: agents should emit confidence with every status report" },
+    { ts: "14:07", proj: "homelab", agent: "infra-agent", kind: "status", t: "Postgres volume 2/5 migrated, ETA 40m for remainder" }
+  ],
+  decisions: [
+    { id: "decision-gate-desync", proj: "albion", state: "pending",
+      title: "Gate desync fix: restart-probe vs re-handshake",
+      options: ["Restart-probe: auto-restart client after each gate to resync",
+                "Re-handshake: reverse-engineer and replay the gate handshake packets"],
+      due: "today" },
+    { id: "decision-eval-scope", proj: "paper", state: "pending",
+      title: "Eval scope: rerun full grid or only v2 delta",
+      options: ["Full grid (2 days compute)", "v2 delta only (4h, weaker claim)"],
+      due: "Aug 25" }
+  ],
+  decisionContext: [
+    { ts: "Aug 19 16:10", t: "navigator first reported chars 'rubber-banding' to gate entrance after transitions" },
+    { ts: "Aug 19 18:34", t: "hypothesis 1: movement-lock flag not cleared — DISPROVEN (flag clears in packet trace)" },
+    { ts: "Aug 20 11:02", t: "hypothesis 2: reliable-seq collision after zone load — DISPROVEN (seqs contiguous)" },
+    { ts: "Aug 20 15:47", t: "key insight: all movement after gate is client-side prediction; server acks contain no position echo" },
+    { ts: "Aug 21 12:30", t: "restart experiment: emit 1 move, restart client, read authoritative resume position → server never moved the char" },
+    { ts: "Aug 21 12:55", t: "conclusion: server drops move stream after gate until a fresh handshake occurs. Two viable fixes identified" },
+    { ts: "Aug 22 12:41", t: "packet-tracer run #3 confirms: reproducible 3/3 times" }
+  ],
+  incomingReport: { ts: "14:31", proj: "albion", agent: "packet-tracer", kind: "status",
+    t: "Gate-probe run #4 complete: server pos unchanged after 3 moves — desync confirmed at handshake layer" }
+};
+
+/* ---------- per-project resume metadata (extension, not contradiction) ---------- */
+const RESUME = {
+  albion:   { left: "You had just written up the two viable fixes after the restart experiment proved the server never applies post-gate moves — then switched to the homelab migration.", when: "yesterday 13:05", cutoff: "10:00" },
+  homelab:  { left: "Kicked off infra-agent on the Postgres volume migration and watched volume 1 land cleanly on the new ZFS pool.", when: "today 13:55", cutoff: "14:00" },
+  paper:    { left: "Re-read the advisor's comments and queued the v2 eval rerun; stopped short of choosing the eval scope.", when: "yesterday 21:40", cutoff: "09:00" },
+  apartment:{ left: "Shortlisted the Riverside listing and meant to call back about the garage option.", when: "3 days ago", cutoff: "00:00" }
+};
+
+/* ---------- state ---------- */
+const S = {
+  stack: ["homelab", "albion", "paper"],   // top first
+  shelf: ["apartment"],
+  events: WORLD.events.slice(),
+  captures: WORLD.captures.slice(),
+  reported: false,
+  decided: null,
+  briefingOpen: false,
+  risingId: null
+};
+const gate = WORLD.decisions[0];
+const $ = id => document.getElementById(id);
+const esc = s => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+const proj = id => WORLD.projects.find(p=>p.id===id);
+const changedEvents = id => S.events.filter(e => e.proj === id && e.ts > RESUME[id].cutoff);
+
+/* ---------- render ---------- */
+function render(){
+  renderStack();
+  renderShelf();
+}
+function renderStack(){
+  const el = $("stack");
+  el.innerHTML = S.stack.map((id, pos) => cardHTML(proj(id), pos)).join("");
+  el.querySelectorAll(".card.peek").forEach(c =>
+    c.addEventListener("click", ()=> bringToTop(c.dataset.id)));
+  const popBtn = $("btnPop");
+  if (popBtn) popBtn.addEventListener("click", ev=>{ ev.stopPropagation(); popTop(); });
+  el.querySelectorAll(".decchip.pending").forEach(chip =>
+    chip.addEventListener("click", ev=>{
+      ev.stopPropagation();
+      if (S.stack[0] !== "albion"){
+        bringToTop("albion");
+        S.briefingOpen = true;
+        S.risingId = "albion";
+        renderStack();
+      } else toggleBriefing();
+    }));
+  el.querySelectorAll(".b-opt button").forEach(b =>
+    b.addEventListener("click", ev=>{ ev.stopPropagation(); commitDecision(+b.dataset.opt); }));
+  S.risingId = null;
+}
+
+function cardHTML(p, pos){
+  const top = pos === 0;
+  const chg = changedEvents(p.id);
+  const dec = (p.id === "albion") ? gate : (p.id === "paper" ? WORLD.decisions[1] : null);
+  const rising = S.risingId === p.id ? " rising" : "";
+  const chgBadge = chg.length
+    ? `<span class="chgbadge" id="chg-${p.id}">▲ ${chg.length} changed since you left</span>`
+    : `<span class="chgbadge zero" id="chg-${p.id}">quiet since you left</span>`;
+  let decChip = "";
+  if (dec){
+    if (dec.id === "decision-gate-desync" && S.decided !== null)
+      decChip = `<span class="decchip resolved">✓ decided: ${S.decided===0?"restart-probe":"re-handshake"}</span>`;
+    else if (dec.id === "decision-gate-desync")
+      decChip = `<span class="decchip pending" title="open the briefing">⚑ decision pending — due today</span>`;
+    else
+      decChip = `<span class="decchip" style="cursor:default" title="due Aug 25">⚑ decision — Aug 25</span>`;
+  }
+
+  const head = `<div class="card-head">
+    <span class="pdot" style="background:${p.color}; color:${p.color}"></span>
+    <span class="card-title">${p.name}</span>
+    <span class="spacer"></span>
+    ${chgBadge}${decChip}
+    <span class="depth">${top ? "FOCUS" : "▼ " + pos + " deep"}</span>
+  </div>`;
+
+  if (!top){
+    return `<div class="card peek" data-id="${p.id}">${head}
+      <div class="peek-sub">${esc(RESUME[p.id].left.split("—")[0].split(";")[0].slice(0,88))}… · <b style="color:var(--ink-dim)">tap to resume</b></div>
+    </div>`;
+  }
+
+  const chgList = chg.length
+    ? chg.map(e => `<div class="chg-item${e._fresh?" fresh":""}${e.kind==="decision"?" deci":""}">
+        <span class="ts">${e.ts}</span>
+        <span>${e.agent?`<span class="who">${e.agent}</span> — `:""}${esc(e.t)}</span></div>`).join("")
+    : `<div class="quiet">Nothing happened here while you were away. It'll be exactly as you left it.</div>`;
+  chg.forEach(e => e._fresh = false);
+
+  const agents = p.agents.length
+    ? `<div class="sect"><h3>Agents</h3><div class="agent-row">` +
+      p.agents.map(a=>{
+        const st = (a.id==="navigator" && S.decided!==null) ? "ready" : a.state;
+        const last = (a.id==="packet-tracer" && S.reported) ? "14:31" : a.lastReport;
+        return `<span class="agent-pill"><span class="adot ${st}"></span><span class="nm">${a.name}</span>
+          <span style="color:var(--ink-faint)">${st} · ${last}</span></span>`;
+      }).join("") + `</div></div>` : "";
+
+  const next = p.tasks.filter(t=>t.state!=="done").map(t=>{
+    let st = t.state;
+    if (p.id==="albion" && t.t==="Fix gate desync" && S.decided!==null) st = "doing";
+    const bx = st==="doing"?"[◐]":(st==="blocked"?"[!]":"[ ]");
+    return `<div class="next-item ${st==="doing"?"doing":""} ${st==="blocked"?"blockedt":""}">
+      <span class="bx">${bx}</span><span>${esc(t.t)}</span></div>`;
+  }).join("");
+
+  const briefing = (p.id==="albion" && S.briefingOpen && S.decided===null) ? briefingHTML() : "";
+
+  return `<div class="card top${rising}" data-id="${p.id}" id="card-${p.id}">
+    ${head}
+    <div class="card-body">
+      <div class="sect"><h3>Where you left off</h3>
+        <div class="leftoff">${esc(RESUME[p.id].left)}<span class="when">— ${RESUME[p.id].when}</span></div></div>
+      <div class="sect"><h3>What changed since <span class="cnt">${chg.length ? chg.length + " event" + (chg.length>1?"s":"") : ""}</span></h3>
+        ${chgList}</div>
+      ${briefing}
+      ${agents}
+      <div class="sect"><h3>Next actions</h3>${next}</div>
+    </div>
+    <div class="card-actions">
+      <button class="cbtn" id="btnPop">⌄ pop — done here for now</button>
+      <span style="flex:1"></span>
+      <span style="font-size:11.5px;color:var(--ink-faint);align-self:center">goal: ${esc(p.goal)}</span>
+    </div>
+  </div>`;
+}
+
+function briefingHTML(){
+  const ctx = WORLD.decisionContext.slice();
+  if (S.reported) ctx.push({ ts:"Aug 22 14:31", t:"run #4: reproducible 4/4 — confidence very high" });
+  const steps = ctx.map((c,i)=>{
+    const hot = c.t.startsWith("key insight");
+    const concl = c.t.startsWith("conclusion");
+    return `<div class="b-step${hot?" hot":""}${concl?" concl":""}" style="animation-delay:${i*0.33}s">
+      <span class="ts">${c.ts}</span><span class="tx">${esc(c.t)}</span></div>`;
+  }).join("");
+  const delay = (ctx.length*0.33 + 0.25).toFixed(2);
+  return `<div class="briefing">
+    <h4>⚑ ${esc(gate.title)}</h4>
+    <div class="b-sub">Getting you back up to speed — the trail replays in order. ~30 seconds.</div>
+    ${steps}
+    <div class="b-opts" style="animation-delay:${delay}s">
+      <div class="b-opt"><p><b>Restart-probe</b> — ${esc(gate.options[0].split(": ")[1])}. Ships today; ~3 min penalty per gate.</p>
+        <button data-opt="0">Choose restart-probe</button></div>
+      <div class="b-opt"><p><b>Re-handshake</b> — ${esc(gate.options[1].split(": ")[1])}. Clean fix; 2–3 days of protocol work.</p>
+        <button data-opt="1">Choose re-handshake</button></div>
+    </div>
+  </div>`;
+}
+
+function renderShelf(){
+  const el = $("shelf");
+  let h = `<span class="shelf-label">shelf</span>`;
+  for (const id of S.shelf){
+    const p = proj(id);
+    h += `<span class="shelf-item" data-id="${id}"><span class="sdot" style="background:${p.color}"></span>
+      ${p.name}<span class="push">▲ push</span></span>`;
+  }
+  h += `<span class="shelf-item inboxchip" id="inboxChip">
+    <span class="sdot" style="background:var(--purple)"></span>✎ inbox
+    <span class="push">${S.captures.length} unsorted</span></span>`;
+  el.innerHTML = h;
+  el.querySelectorAll(".shelf-item[data-id]").forEach(s =>
+    s.addEventListener("click", ()=> pushProject(s.dataset.id)));
+  $("inboxChip").addEventListener("click", toggleInbox);
+}
+
+/* ---------- stack ops ---------- */
+function bringToTop(id){
+  // leaving the current top: you "touched" it, so its counter resets
+  const oldTop = S.stack[0];
+  if (oldTop) RESUME[oldTop].cutoff = "14:35";
+  S.stack = [id, ...S.stack.filter(x=>x!==id)];
+  S.risingId = id;
+  S.briefingOpen = false;
+  render();
+  $("stack").scrollTop = 0;
+  if (id === "albion" && S.decided === null)
+    toast("Albion resumed — card auto-expanded", "Read \"what changed\", then hit the ⚑ decision chip to re-orient.");
+  else
+    toast(`${proj(id).name} brought to top`, "The old focus keeps its place in the stack.");
+}
+function popTop(){
+  if (S.stack.length === 0) return;
+  const id = S.stack[0];
+  RESUME[id].cutoff = "14:35";
+  const el = $("card-" + id);
+  el.classList.add("popping");
+  setTimeout(()=>{
+    S.stack.shift();
+    if (!S.shelf.includes(id)) S.shelf.push(id);
+    S.risingId = S.stack[0] || null;
+    render();
+    toast(`Popped ${proj(id).name} → shelf`, S.stack.length ? `${proj(S.stack[0]).name} is your focus now.` : "Stack empty — enjoy the silence.");
+  }, 380);
+}
+function pushProject(id){
+  S.shelf = S.shelf.filter(x=>x!==id);
+  const oldTop = S.stack[0];
+  if (oldTop) RESUME[oldTop].cutoff = "14:35";
+  S.stack = [id, ...S.stack.filter(x=>x!==id)];
+  S.risingId = id;
+  S.briefingOpen = false;
+  render();
+  $("stack").scrollTop = 0;
+  toast(`Pushed ${proj(id).name}`, "Previous focus parked one layer down, resume note intact.");
+}
+
+/* ---------- workflow 2: agent report ---------- */
+function simulateReport(){
+  if (S.reported){ toast("packet-tracer is quiet", "Nothing new since 14:31."); return; }
+  S.reported = true;
+  const e = Object.assign({_fresh:true}, WORLD.incomingReport);
+  S.events.push(e);
+  render();
+  const badge = $("chg-albion");
+  if (badge) badge.classList.add("bump");
+  const card = document.querySelector(`.card[data-id="albion"]`);
+  if (card) card.classList.add("reportglow");
+  const isTop = S.stack[0] === "albion";
+  toast("▶ packet-tracer reported 14:31",
+    isTop ? "Appended to Albion's \"what changed\" feed." :
+    "Albion's resume card absorbed it — ▲ count bumped. Nothing stole your focus.");
+}
+
+/* ---------- workflow 3: briefing + commit ---------- */
+function toggleBriefing(){
+  S.briefingOpen = !S.briefingOpen;
+  render();
+  if (S.briefingOpen){
+    const b = document.querySelector(".briefing");
+    if (b) setTimeout(()=>b.scrollIntoView({block:"nearest", behavior:"smooth"}), 200);
+  }
+}
+function commitDecision(idx){
+  S.decided = idx;
+  S.briefingOpen = false;
+  gate.state = "resolved";
+  const chosen = idx===0 ? "restart-probe" : "re-handshake";
+  S.events.push({ ts:"14:32", proj:"albion", kind:"decision", _fresh:true,
+    t:`Decision resolved: chose ${chosen} — navigator unblocked, routing work resumes` });
+  render();
+  toast(`✓ Committed: ${chosen}`, "Chip resolved · logged to Albion's feed · navigator → ready.");
+}
+
+/* ---------- workflow 1: capture ---------- */
+function openCapture(){ $("veil").classList.add("open"); setTimeout(()=>$("capInput").focus(), 50); }
+function closeCapture(){ $("veil").classList.remove("open"); $("capInput").value=""; $("capInput").blur(); }
+function saveCapture(){
+  const v = $("capInput").value.trim();
+  if (!v){ closeCapture(); return; }
+  S.captures.unshift({ t:v, ts:"14:33" });
+  closeCapture();
+  renderShelf();
+  const chip = $("inboxChip");
+  chip.classList.add("pulse");
+  setTimeout(()=>chip.classList.remove("pulse"), 1700);
+  toast("✎ Captured → inbox", "Off your mind, off the stack. Sort it never.");
+}
+function toggleInbox(){
+  const el = $("inboxPop");
+  if (el.classList.toggle("open")){
+    el.innerHTML = `<h4>✎ inbox — ${S.captures.length} unsorted</h4>` +
+      S.captures.map(c=>`<div class="ci"><span class="ts">${c.ts}</span><span>${esc(c.t)}</span></div>`).join("");
+  }
+}
+
+/* ---------- chrome ---------- */
+let toastTimer;
+function toast(t, sub){
+  const el = $("toast");
+  el.innerHTML = `<div>${esc(t)}</div><div class="t-sub">${esc(sub)}</div>`;
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>el.classList.remove("show"), 4000);
+}
+function togglePanel(id){
+  const el = $(id);
+  const was = el.classList.contains("open");
+  ["flowsPanel","comparePanel"].forEach(p=>$(p).classList.remove("open"));
+  if (!was) el.classList.add("open");
+}
+$("btnCapture").addEventListener("click", openCapture);
+$("btnReport").addEventListener("click", simulateReport);
+$("btnFlows").addEventListener("click", ()=>togglePanel("flowsPanel"));
+$("btnCompare").addEventListener("click", ()=>togglePanel("comparePanel"));
+$("capInput").addEventListener("keydown", e=>{
+  if (e.key==="Enter") saveCapture();
+  if (e.key==="Escape") closeCapture();
+  e.stopPropagation();
+});
+document.addEventListener("keydown", e=>{
+  if (e.target.tagName === "INPUT") return;
+  if (e.key === "c"){ e.preventDefault(); openCapture(); }
+  if (e.key === "Escape"){
+    closeCapture(); $("inboxPop").classList.remove("open");
+    ["flowsPanel","comparePanel"].forEach(p=>$(p).classList.remove("open"));
+  }
+});
+
+render();
+setTimeout(()=>{ if(!S.reported) simulateReport(); }, 8000);
+</script>
+</body>
+</html>

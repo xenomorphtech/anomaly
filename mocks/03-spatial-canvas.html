@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spatial Canvas — Context Ops</title>
+<style>
+  :root{
+    --void:#060913; --void2:#0a0f1e; --tx:#d6def0; --tx-dim:#8b96b3; --tx-faint:#586179;
+    --card:#0e1424; --card-line:#232d47; --amber:#e8b05a; --red:#e86a5a; --green:#6fd48a;
+    --sans:ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif;
+    --mono:ui-monospace,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;overflow:hidden}
+  body{background:var(--void);color:var(--tx);font-family:var(--sans);font-size:13px;
+    background-image:radial-gradient(ellipse 900px 600px at 70% -10%, #0d1430 0%, transparent 65%)}
+  button{cursor:pointer;font-family:var(--sans)}
+  a{color:#7fa7e8;text-decoration:none}
+
+  /* ===== viewport / world ===== */
+  #viewport{position:fixed;inset:0;cursor:grab;overflow:hidden;touch-action:none}
+  #viewport.panning{cursor:grabbing}
+  #world{position:absolute;left:0;top:0;width:2600px;height:1700px;transform-origin:0 0;
+    background-image:radial-gradient(circle, #1c2542 1.1px, transparent 1.4px);
+    background-size:30px 30px;will-change:transform}
+  #world.flying{transition:transform .95s cubic-bezier(.3,.7,.25,1)}
+  #edges{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
+
+  /* ===== clusters ===== */
+  .cluster{position:absolute;border-radius:26px;padding:18px 20px}
+  .cluster::before{content:"";position:absolute;inset:-40px;border-radius:60px;
+    background:radial-gradient(ellipse at 50% 45%, var(--halo) 0%, transparent 68%);
+    pointer-events:none;z-index:-1}
+  .c-head{display:flex;align-items:baseline;gap:10px;margin-bottom:4px}
+  .c-name{font-size:16px;font-weight:650;letter-spacing:.01em}
+  .c-status{font-family:var(--mono);font-size:9px;letter-spacing:.16em;text-transform:uppercase;
+    border:1px solid;border-radius:9px;padding:1px 8px;opacity:.85}
+  .c-goal{font-size:11.5px;color:var(--tx-dim);margin-bottom:12px;max-width:380px}
+  .c-cards{display:flex;flex-wrap:wrap;gap:8px;max-width:430px}
+  .tcard{background:var(--card);border:1px solid var(--card-line);border-radius:9px;padding:8px 11px;
+    min-width:130px;box-shadow:0 4px 14px rgba(0,0,0,.4);transition:transform .18s, box-shadow .18s}
+  .tcard:hover{transform:translateY(-2px);box-shadow:0 8px 22px rgba(0,0,0,.55)}
+  .tcard .tstate{font-family:var(--mono);font-size:8.5px;letter-spacing:.14em;text-transform:uppercase;margin-bottom:3px}
+  .tstate.done{color:var(--tx-faint)}.tstate.doing{color:var(--green)}
+  .tstate.todo{color:var(--tx-dim)}.tstate.blocked{color:var(--red)}
+  .tcard .tt{font-size:12px;line-height:1.35}
+  .tcard.done-c .tt{color:var(--tx-faint);text-decoration:line-through}
+  .c-agents{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+  .achip{display:flex;align-items:center;gap:7px;background:#0b1120;border:1px solid var(--card-line);
+    border-radius:16px;padding:4px 12px 4px 8px;font-family:var(--mono);font-size:10.5px;transition:all .2s}
+  .achip .dot{width:7px;height:7px;border-radius:50%}
+  .achip.working .dot{background:var(--green);box-shadow:0 0 8px var(--green);animation:pulse 2s infinite}
+  .achip.blocked .dot{background:var(--red);box-shadow:0 0 8px var(--red);animation:blink 1.1s steps(2) infinite}
+  .achip.idle .dot{background:#7d6a3a}
+  .achip .lr{color:var(--tx-faint);font-size:9px}
+  .achip.reporting{border-color:var(--amber);box-shadow:0 0 18px rgba(232,176,90,.35)}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+  @keyframes blink{50%{opacity:.3}}
+
+  /* ===== floating captures ===== */
+  .fcap{position:absolute;width:200px;background:#101527;border:1px dashed #3a4568;border-radius:11px;
+    padding:9px 12px;box-shadow:0 6px 20px rgba(0,0,0,.5);transition:transform .2s}
+  .fcap:hover{transform:scale(1.03) rotate(0deg) !important}
+  .fcap .fl{font-family:var(--mono);font-size:8.5px;letter-spacing:.16em;text-transform:uppercase;
+    color:#7d87ab;margin-bottom:4px;display:flex;justify-content:space-between}
+  .fcap .ft{font-size:12px;line-height:1.45;color:#c6cfe6;font-style:italic}
+  .fcap.pop{animation:capPop .5s cubic-bezier(.2,1.4,.4,1)}
+  @keyframes capPop{from{opacity:0;transform:scale(.5)}to{opacity:1}}
+
+  /* ===== decision cards ===== */
+  .dcard{position:absolute;width:250px;background:linear-gradient(#171426,#121020);border:1px solid var(--amber);
+    border-radius:12px;padding:11px 14px;cursor:pointer;box-shadow:0 0 24px rgba(232,176,90,.22),0 8px 24px rgba(0,0,0,.5);
+    transition:all .25s;z-index:5}
+  .dcard:hover{box-shadow:0 0 36px rgba(232,176,90,.4),0 10px 30px rgba(0,0,0,.6);transform:translateY(-2px)}
+  .dcard .dl{font-family:var(--mono);font-size:8.5px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--amber);display:flex;justify-content:space-between;margin-bottom:4px}
+  .dcard .dl .due{color:var(--red)}
+  .dcard .dt{font-size:13px;font-weight:600;line-height:1.4}
+  .dcard .dhint{font-size:10.5px;color:var(--tx-dim);margin-top:5px;font-style:italic}
+  .dcard.resolved{border-color:var(--green);box-shadow:0 0 22px rgba(111,212,138,.25);cursor:default}
+  .dcard.resolved .dl{color:var(--green)}
+  .dcard .dopts{display:none;margin-top:10px;border-top:1px solid #2a2340;padding-top:9px}
+  .dcard.orienting .dopts{display:block}
+  .dcard.orienting{width:290px;z-index:20}
+  .dcard.orienting .dhint{display:none}
+  .dbtn{display:block;width:100%;text-align:left;background:#1d1830;border:1px solid #3a3158;color:var(--tx);
+    border-radius:8px;padding:8px 10px;margin-bottom:7px;font-size:11.5px;line-height:1.4;transition:all .15s}
+  .dbtn b{display:block;font-family:var(--mono);font-size:9px;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--amber);margin-bottom:2px}
+  .dbtn:hover{border-color:var(--amber);background:#251d3d}
+  .dres{display:none;margin-top:9px;font-size:11.5px;color:var(--green);line-height:1.45}
+  .dcard.resolved .dres{display:block}
+
+  /* ===== context trail ===== */
+  .trail{position:absolute;width:225px;background:#10182c;border:1px solid #2c3a5e;border-left:3px solid var(--amber);
+    border-radius:10px;padding:8px 11px;box-shadow:0 8px 24px rgba(0,0,0,.55);opacity:0;transform:scale(.6);
+    transition:opacity .4s, transform .45s cubic-bezier(.2,1.2,.4,1);z-index:8;pointer-events:none}
+  .trail.shown{opacity:1;transform:scale(1);pointer-events:auto}
+  .trail .trn{font-family:var(--mono);font-size:8.5px;color:var(--amber);letter-spacing:.1em;margin-bottom:3px;
+    display:flex;justify-content:space-between}
+  .trail .trn .ts{color:var(--tx-faint)}
+  .trail .trt{font-size:11px;line-height:1.45;color:#ccd5ea}
+  .trail.dim{opacity:.45}
+  #edges line{stroke:var(--amber);stroke-opacity:0;stroke-width:1.6;stroke-dasharray:5 5;transition:stroke-opacity .5s}
+  #edges line.shown{stroke-opacity:.45}
+
+  /* ===== event stickies ===== */
+  .esticky{position:absolute;width:210px;background:#0f1a1b;border:1px solid #2b4a44;border-radius:10px;
+    padding:8px 11px;box-shadow:0 8px 22px rgba(0,0,0,.5);animation:capPop .5s cubic-bezier(.2,1.4,.4,1);z-index:6}
+  .esticky .el{font-family:var(--mono);font-size:8.5px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--green);margin-bottom:3px;display:flex;justify-content:space-between}
+  .esticky .et{font-size:11px;line-height:1.45;color:#c2d4cb}
+
+  /* ===== fixed chrome ===== */
+  #badge{position:fixed;top:12px;left:14px;z-index:40;background:rgba(10,15,30,.82);border:1px solid var(--card-line);
+    border-radius:12px;padding:9px 14px;backdrop-filter:blur(6px);max-width:520px}
+  #badge b{font-size:14px;letter-spacing:.02em}
+  #badge span{color:var(--tx-dim);font-size:11px}
+  #ctrl{position:fixed;top:12px;right:14px;z-index:40;display:flex;gap:8px;align-items:center;
+    background:rgba(10,15,30,.82);border:1px solid var(--card-line);border-radius:12px;padding:7px 10px;backdrop-filter:blur(6px)}
+  .cbtn{background:#141c33;border:1px solid #2b3757;color:var(--tx);border-radius:8px;padding:5px 11px;
+    font-size:11px;transition:all .15s}
+  .cbtn:hover{border-color:var(--amber);color:var(--amber)}
+  #zoomlvl{font-family:var(--mono);font-size:10px;color:var(--tx-faint);width:38px;text-align:center}
+
+  /* minimap */
+  #minimap{position:fixed;right:14px;bottom:14px;width:208px;height:136px;z-index:40;background:rgba(8,12,24,.88);
+    border:1px solid var(--card-line);border-radius:10px;overflow:hidden;cursor:crosshair;backdrop-filter:blur(4px)}
+  #minimap .mm-c{position:absolute;border-radius:5px;opacity:.55}
+  #minimap .mm-dot{position:absolute;width:3px;height:3px;border-radius:50%;background:#8b96b3}
+  #mm-view{position:absolute;border:1px solid rgba(230,220,200,.75);border-radius:2px;
+    box-shadow:0 0 0 999px rgba(4,6,14,.45);pointer-events:none}
+  #minimap .mm-label{position:absolute;left:8px;top:5px;font-family:var(--mono);font-size:8px;
+    letter-spacing:.18em;color:var(--tx-faint);text-transform:uppercase}
+
+  /* capture overlay */
+  #capov{position:fixed;inset:0;z-index:60;display:none;align-items:flex-start;justify-content:center;
+    padding-top:22vh;background:rgba(4,6,14,.55);backdrop-filter:blur(2px)}
+  #capov.open{display:flex}
+  #capbox{width:min(520px,90vw);background:#101527;border:1px solid #3a4568;border-radius:14px;
+    padding:16px 18px;box-shadow:0 24px 70px rgba(0,0,0,.7)}
+  #capbox .micro{font-family:var(--mono);font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--tx-dim)}
+  #capinput{width:100%;background:none;border:none;outline:none;color:var(--tx);font-size:15px;
+    font-family:var(--sans);margin-top:8px;font-style:italic}
+  #capbox .hint{font-size:10px;color:var(--tx-faint);margin-top:10px}
+
+  /* toast */
+  #toast{position:fixed;left:50%;transform:translateX(-50%);top:64px;z-index:70;display:flex;flex-direction:column;gap:8px;align-items:center}
+  .tst{background:rgba(14,20,36,.94);border:1px solid #2b3757;border-radius:10px;padding:8px 16px;font-size:12px;
+    box-shadow:0 10px 30px rgba(0,0,0,.6);animation:capPop .4s ease-out;max-width:480px}
+  .tst b{color:var(--amber)}
+
+  /* popovers */
+  .pop{position:fixed;top:58px;right:14px;width:340px;background:rgba(12,17,32,.96);border:1px solid #2b3757;
+    border-radius:12px;padding:14px 16px;z-index:80;display:none;box-shadow:0 16px 50px rgba(0,0,0,.7);
+    font-size:12px;line-height:1.6;backdrop-filter:blur(6px)}
+  .pop.open{display:block}
+  .pop h4{font-family:var(--mono);font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--amber);margin:9px 0 4px}
+  .pop h4:first-child{margin-top:0}
+  .pop li{margin-left:16px;color:var(--tx-dim);margin-bottom:3px}
+  .pop b{color:var(--tx)}
+  .pop kbd{border:1px solid #2b3757;border-radius:3px;padding:0 4px;font-size:11px;font-family:var(--mono)}
+</style>
+</head>
+<body>
+
+<div id="viewport"><div id="world">
+  <svg id="edges"></svg>
+</div></div>
+
+<div id="badge">
+  <b>⟡ Spatial Canvas</b><br>
+  <span>projects are places; unfiled thoughts drift in the space between — geography instead of folders</span>
+</div>
+
+<div id="ctrl">
+  <button class="cbtn" onclick="openCapture()">＋ capture <span style="opacity:.55">(c)</span></button>
+  <button class="cbtn" id="simbtn" onclick="simulateReport()">▶ simulate report</button>
+  <button class="cbtn" onclick="fitAll()">⤢ fit</button>
+  <span id="zoomlvl">100%</span>
+  <button class="cbtn" onclick="togglePop('workflows')">?</button>
+  <button class="cbtn" onclick="togglePop('compare')">ⓘ</button>
+  <a href="index.html" style="font-size:11px;margin-left:2px">← index</a>
+</div>
+
+<div id="minimap"><span class="mm-label">sector map</span><div id="mm-view"></div></div>
+
+<div id="capov" onclick="if(event.target===this) closeCapture()">
+  <div id="capbox">
+    <span class="micro">quick capture · lands adrift, no cluster required</span>
+    <input id="capinput" placeholder="Type a thought and press Enter…" autocomplete="off">
+    <div class="hint">Enter to drop it onto the canvas near your view · Esc to cancel</div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<div class="pop" id="pop-workflows">
+  <h4>Try the workflows</h4>
+  <li><b>Capture</b> — press <kbd>c</kbd> or ＋ capture. Type, hit Enter: the thought drops as a drifting card in the empty space near your view. No cluster, no folder — fine.</li>
+  <li><b>Agent report</b> — click <b>▶ simulate report</b> (or wait ~8s). The packet-tracer chip glows and a report sticky appears beside the Albion cluster; your camera never moves.</li>
+  <li><b>Orient &amp; decide</b> — click the amber <b>⚑ decision card</b> at the edge of Albion. The camera flies in and the evidence trail fans out, card by card, leading to the decision. Commit there.</li>
+  <li>Drag to pan · scroll to zoom · click the sector map to jump.</li>
+</div>
+<div class="pop" id="pop-compare">
+  <h4>Strengths</h4>
+  <li>Spatial memory is free indexing — you remember <i>where</i> things live.</li>
+  <li>Unfiled captures are first-class citizens of the map, not a guilt-inducing inbox.</li>
+  <li>The evidence trail makes decision context literally lead somewhere.</li>
+  <h4>Weaknesses</h4>
+  <li>No inherent ordering — recency and urgency don't jump out without extra signals.</li>
+  <li>Manual layout becomes a chore as clusters grow and collide.</li>
+  <li>Poor fit for dense text scanning; lots of camera motion.</li>
+</div>
+
+<script>
+const WORLD = {
+  now: "2026-08-22T14:30:00",
+  projects: [
+    { id: "albion", name: "Albion Automation", color: "#e0a458",
+      status: "active", goal: "Fully autonomous gathering + market loop",
+      agents: [
+        { id: "packet-tracer", name: "packet-tracer", state: "working",
+          task: "Instrument gate transition packets", lastReport: "12:41" },
+        { id: "navigator", name: "navigator", state: "blocked",
+          task: "Cross-map routing through gates", lastReport: "11:58",
+          blockedOn: "decision-gate-desync" },
+        { id: "market-bot", name: "market-bot", state: "idle",
+          task: "Waiting on price feed refactor", lastReport: "09:12" }
+      ],
+      tasks: [
+        { t: "Fix gate desync", state: "blocked" },
+        { t: "Price feed refactor", state: "todo" },
+        { t: "Resource route optimizer", state: "done" }
+      ]},
+    { id: "homelab", name: "Homelab Migration", color: "#6fb3d2",
+      status: "active", goal: "Move all services from old NUC to Proxmox cluster",
+      agents: [
+        { id: "infra-agent", name: "infra-agent", state: "working",
+          task: "Migrating Postgres volumes to new ZFS pool", lastReport: "14:07" }
+      ],
+      tasks: [
+        { t: "Migrate Postgres volumes", state: "doing" },
+        { t: "Move reverse proxy + certs", state: "todo" },
+        { t: "Decommission old NUC", state: "todo" }
+      ]},
+    { id: "paper", name: "Anomaly Detection Paper", color: "#b58ee0",
+      status: "deadline", goal: "Submit to conference — deadline Sep 5",
+      agents: [],
+      tasks: [
+        { t: "Rerun eval on v2 dataset", state: "doing" },
+        { t: "Write related-work section", state: "todo" },
+        { t: "Address advisor comments", state: "blocked" }
+      ]},
+    { id: "apartment", name: "Apartment Hunt", color: "#7fc98a",
+      status: "background", goal: "Find 2br under budget before Nov",
+      agents: [],
+      tasks: [
+        { t: "Visit Riverside listing", state: "todo" },
+        { t: "Compare commute times", state: "todo" }
+      ]}
+  ],
+  captures: [ // unclassified quick captures
+    { t: "idea: agents should emit confidence with every status report", ts: "13:22" },
+    { t: "check if ZFS snapshot schedule survives migration", ts: "10:45" },
+    { t: "landlord mentioned garage option?? follow up", ts: "yesterday" }
+  ],
+  events: [ // newest last
+    { ts: "09:12", proj: "albion", agent: "market-bot", kind: "status", t: "Paused: price feed schema changed upstream, refactor needed" },
+    { ts: "10:03", proj: "paper", kind: "note", t: "Advisor replied: eval section needs v2 dataset numbers" },
+    { ts: "10:45", proj: null, kind: "capture", t: "check if ZFS snapshot schedule survives migration" },
+    { ts: "11:20", proj: "albion", agent: "packet-tracer", kind: "status", t: "Gate-probe run #2: emitted 1 move, restarted client — server position UNCHANGED" },
+    { ts: "11:58", proj: "albion", agent: "navigator", kind: "blocked", t: "Blocked: cannot route through gates until desync strategy chosen" },
+    { ts: "12:41", proj: "albion", agent: "packet-tracer", kind: "status", t: "Gate-probe run #3: same result. Server never applied any move after gate transition" },
+    { ts: "13:22", proj: null, kind: "capture", t: "idea: agents should emit confidence with every status report" },
+    { ts: "14:07", proj: "homelab", agent: "infra-agent", kind: "status", t: "Postgres volume 2/5 migrated, ETA 40m for remainder" }
+  ],
+  decisions: [
+    { id: "decision-gate-desync", proj: "albion", state: "pending",
+      title: "Gate desync fix: restart-probe vs re-handshake",
+      options: ["Restart-probe: auto-restart client after each gate to resync",
+                "Re-handshake: reverse-engineer and replay the gate handshake packets"],
+      due: "today" },
+    { id: "decision-eval-scope", proj: "paper", state: "pending",
+      title: "Eval scope: rerun full grid or only v2 delta",
+      options: ["Full grid (2 days compute)", "v2 delta only (4h, weaker claim)"],
+      due: "Aug 25" }
+  ],
+  decisionContext: [ // accumulated context behind the gate-desync decision, oldest first
+    { ts: "Aug 19 16:10", t: "navigator first reported chars 'rubber-banding' to gate entrance after transitions" },
+    { ts: "Aug 19 18:34", t: "hypothesis 1: movement-lock flag not cleared — DISPROVEN (flag clears in packet trace)" },
+    { ts: "Aug 20 11:02", t: "hypothesis 2: reliable-seq collision after zone load — DISPROVEN (seqs contiguous)" },
+    { ts: "Aug 20 15:47", t: "key insight: all movement after gate is client-side prediction; server acks contain no position echo" },
+    { ts: "Aug 21 12:30", t: "restart experiment: emit 1 move, restart client, read authoritative resume position → server never moved the char" },
+    { ts: "Aug 21 12:55", t: "conclusion: server drops move stream after gate until a fresh handshake occurs. Two viable fixes identified" },
+    { ts: "Aug 22 12:41", t: "packet-tracer run #3 confirms: reproducible 3/3 times" }
+  ],
+  incomingReport: { ts: "14:31", proj: "albion", agent: "packet-tracer", kind: "status",
+    t: "Gate-probe run #4 complete: server pos unchanged after 3 moves — desync confirmed at handshake layer" }
+};
+
+/* ---------- layout geometry (world coords) ---------- */
+const WW = 2600, WH = 1700;
+const GEO = {
+  albion:    { x:170,  y:250,  w:520 },
+  homelab:   { x:1120, y:190,  w:440 },
+  paper:     { x:1640, y:780,  w:460 },
+  apartment: { x:360,  y:1120, w:420 }
+};
+const CAP_SPOTS = [[930,760],[1450,560],[820,1010]];
+const DEC_POS = { "decision-gate-desync": [740, 640], "decision-eval-scope": [1660, 1160] };
+// evidence trail: an arc through the empty space, leading to the decision card
+const TRAIL_POS = [[1210,300],[1370,400],[1470,530],[1470,680],[1380,810],[1210,880],[1000,860]];
+
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+const world = $("#world"), viewport = $("#viewport");
+const projById = id => WORLD.projects.find(p=>p.id===id);
+let reportFired=false, trailShown=false, capN=0;
+
+/* ---------- render clusters ---------- */
+function h2rgba(hex,a){
+  const n=parseInt(hex.slice(1),16);
+  return `rgba(${n>>16&255},${n>>8&255},${n&255},${a})`;
+}
+WORLD.projects.forEach(p=>{
+  const g = GEO[p.id];
+  const el = document.createElement("div");
+  el.className = "cluster"; el.id = "cluster-"+p.id;
+  el.style.cssText = `left:${g.x}px;top:${g.y}px;--halo:${h2rgba(p.color,.14)}`;
+  el.innerHTML = `
+    <div class="c-head"><span class="c-name" style="color:${p.color}">${esc(p.name)}</span>
+      <span class="c-status" style="color:${p.color};border-color:${h2rgba(p.color,.5)}">${p.status}</span></div>
+    <div class="c-goal">${esc(p.goal)}</div>
+    <div class="c-cards">${p.tasks.map(t=>
+      `<div class="tcard ${t.state==='done'?'done-c':''}"><div class="tstate ${t.state}">${t.state}</div><div class="tt">${esc(t.t)}</div></div>`).join("")}</div>
+    <div class="c-agents">${p.agents.map(a=>
+      `<span class="achip ${a.state}" id="chip-${a.id}" title="${esc(a.task)}"><span class="dot"></span>${a.name}<span class="lr">${a.lastReport}</span></span>`).join("")}</div>`;
+  world.appendChild(el);
+});
+
+/* ---------- floating captures ---------- */
+function addCaptureCard(t, ts, x, y, pop){
+  const el = document.createElement("div");
+  el.className = "fcap" + (pop?" pop":"");
+  const rot = (Math.random()*5-2.5).toFixed(1);
+  el.style.cssText = `left:${x}px;top:${y}px;transform:rotate(${rot}deg)`;
+  el.innerHTML = `<div class="fl"><span>✦ adrift</span><span>${esc(ts)}</span></div><div class="ft">${esc(t)}</div>`;
+  world.appendChild(el);
+  mmDot(x,y);
+  return el;
+}
+WORLD.captures.forEach((c,i)=>addCaptureCard(c.t, c.ts, CAP_SPOTS[i][0], CAP_SPOTS[i][1], false));
+
+/* ---------- decision cards ---------- */
+WORLD.decisions.forEach(d=>{
+  const p = projById(d.proj), [x,y] = DEC_POS[d.id];
+  const el = document.createElement("div");
+  el.className = "dcard"; el.id = "dcard-"+d.id;
+  el.style.cssText = `left:${x}px;top:${y}px`;
+  el.innerHTML = `
+    <div class="dl"><span>⚑ decision pending</span><span class="due">due ${esc(d.due)}</span></div>
+    <div class="dt">${esc(d.title)}</div>
+    <div class="dhint">${d.id==="decision-gate-desync" ? "click to fly in &amp; unroll the evidence trail ▸" : "context pending — low priority"}</div>
+    <div class="dopts">${d.options.map((o,i)=>{
+      const [head,rest] = [o.split(":")[0], o.split(":").slice(1).join(":")];
+      return `<button class="dbtn" onclick="commitDecision('${d.id}',${i});event.stopPropagation()"><b>choose ${esc(head)}</b>${esc(rest||o)}</button>`;
+    }).join("")}</div>
+    <div class="dres"></div>`;
+  if(d.id==="decision-gate-desync") el.onclick = ()=>flyToDecision();
+  world.appendChild(el);
+});
+
+/* ---------- evidence trail (hidden until orient) ---------- */
+const trailEls = [];
+const edgesSvg = $("#edges");
+WORLD.decisionContext.forEach((c,i)=>{
+  const [x,y] = TRAIL_POS[i];
+  const el = document.createElement("div");
+  el.className = "trail";
+  el.style.cssText = `left:${x}px;top:${y}px`;
+  el.innerHTML = `<div class="trn"><span>№ ${i+1} / ${WORLD.decisionContext.length}</span><span class="ts">${esc(c.ts)}</span></div>
+    <div class="trt">${esc(c.t)}</div>`;
+  world.appendChild(el);
+  trailEls.push(el);
+});
+// connective tissue: dashed lines card → card → decision
+const linePts = [...TRAIL_POS.map(p=>[p[0]+112, p[1]+34]), [DEC_POS["decision-gate-desync"][0]+125, DEC_POS["decision-gate-desync"][1]+30]];
+const edgeLines = [];
+for(let i=0;i<linePts.length-1;i++){
+  const l = document.createElementNS("http://www.w3.org/2000/svg","line");
+  l.setAttribute("x1",linePts[i][0]); l.setAttribute("y1",linePts[i][1]);
+  l.setAttribute("x2",linePts[i+1][0]); l.setAttribute("y2",linePts[i+1][1]);
+  edgesSvg.appendChild(l); edgeLines.push(l);
+}
+
+/* ---------- pan / zoom ---------- */
+let px=0, py=0, scale=1;
+function applyTransform(){
+  world.style.transform = `translate(${px}px,${py}px) scale(${scale})`;
+  $("#zoomlvl").textContent = Math.round(scale*100)+"%";
+  updateMinimapView();
+}
+function fitAll(){
+  flyTo((WW)/2, (WH)/2, Math.min(innerWidth/WW, innerHeight/WH)*1.06);
+}
+function flyTo(wx, wy, s){
+  world.classList.add("flying");
+  scale = s;
+  px = innerWidth/2 - wx*s;
+  py = innerHeight/2 - wy*s;
+  applyTransform();
+  setTimeout(()=>world.classList.remove("flying"), 1000);
+}
+let panning=false, moved=false, sx=0, sy=0;
+viewport.addEventListener("pointerdown", e=>{
+  if(e.button!==0) return;
+  moved=false;
+  if(e.target.closest(".dcard,.dbtn,.tcard,.achip,.fcap,.esticky,.trail")) return; // let cards take the click
+  panning=true; sx=e.clientX-px; sy=e.clientY-py;
+  viewport.classList.add("panning");
+});
+window.addEventListener("pointermove", e=>{
+  if(!panning) return;
+  const nx=e.clientX-sx, ny=e.clientY-sy;
+  if(Math.abs(nx-px)+Math.abs(ny-py)>2) moved=true;
+  px=nx; py=ny; applyTransform();
+});
+window.addEventListener("pointerup", ()=>{ panning=false; viewport.classList.remove("panning"); });
+viewport.addEventListener("click", e=>{ if(moved){ moved=false; e.stopPropagation(); } }, true);
+viewport.addEventListener("wheel", e=>{
+  e.preventDefault();
+  const f = Math.exp(-e.deltaY*0.0013);
+  const ns = Math.min(2.6, Math.max(0.22, scale*f));
+  px = e.clientX - (e.clientX-px)*(ns/scale);
+  py = e.clientY - (e.clientY-py)*(ns/scale);
+  scale = ns;
+  applyTransform();
+},{passive:false});
+
+/* ---------- minimap ---------- */
+const MMW=208, MMH=136, mmS=Math.min(MMW/WW, MMH/WH);
+const minimap = $("#minimap");
+WORLD.projects.forEach(p=>{
+  const g=GEO[p.id];
+  const el=document.createElement("div");
+  el.className="mm-c";
+  el.style.cssText=`left:${g.x*mmS}px;top:${g.y*mmS}px;width:${(g.w)*mmS}px;height:${300*mmS}px;background:${p.color}`;
+  minimap.appendChild(el);
+});
+function mmDot(x,y){
+  const el=document.createElement("div");
+  el.className="mm-dot";
+  el.style.cssText=`left:${x*mmS}px;top:${y*mmS}px`;
+  minimap.appendChild(el);
+}
+function updateMinimapView(){
+  const v=$("#mm-view");
+  v.style.left=(-px/scale)*mmS+"px"; v.style.top=(-py/scale)*mmS+"px";
+  v.style.width=(innerWidth/scale)*mmS+"px"; v.style.height=(innerHeight/scale)*mmS+"px";
+}
+minimap.addEventListener("click", e=>{
+  const r=minimap.getBoundingClientRect();
+  flyTo((e.clientX-r.left)/mmS, (e.clientY-r.top)/mmS, Math.max(scale,.55));
+});
+
+/* ---------- workflow 1: capture ---------- */
+function openCapture(){ $("#capov").classList.add("open"); $("#capinput").value=""; $("#capinput").focus(); }
+function closeCapture(){ $("#capov").classList.remove("open"); }
+function submitCapture(){
+  const v=$("#capinput").value.trim();
+  if(!v){ closeCapture(); return; }
+  capN++;
+  const ts="14:"+String(32+capN).padStart(2,"0");
+  // drop near current view center, drifting in empty space
+  const wx=(innerWidth/2-px)/scale + (Math.random()*160-80);
+  const wy=(innerHeight/2-py)/scale + (Math.random()*140-40) + 60;
+  addCaptureCard(v, ts, Math.max(40,Math.min(WW-260,wx)), Math.max(40,Math.min(WH-120,wy)), true);
+  WORLD.captures.unshift({t:v, ts});
+  closeCapture();
+  toast(`✦ captured — drifting on the canvas, unfiled`);
+}
+$("#capinput").addEventListener("keydown", e=>{
+  if(e.key==="Enter") submitCapture();
+  if(e.key==="Escape") closeCapture();
+});
+
+/* ---------- workflow 2: agent report ---------- */
+function simulateReport(){
+  if(reportFired) return;
+  reportFired=true;
+  const r=WORLD.incomingReport;
+  WORLD.events.push(r);
+  const chip=$("#chip-packet-tracer");
+  chip.classList.add("reporting");
+  chip.querySelector(".lr").textContent=r.ts;
+  projById("albion").agents.find(a=>a.id==="packet-tracer").lastReport=r.ts;
+  setTimeout(()=>chip.classList.remove("reporting"), 6000);
+  const el=document.createElement("div");
+  el.className="esticky";
+  el.style.cssText=`left:${GEO.albion.x+530}px;top:${GEO.albion.y+40}px`;
+  el.innerHTML=`<div class="el"><span>▸ packet-tracer</span><span>${r.ts}</span></div><div class="et">${esc(r.t)}</div>`;
+  world.appendChild(el);
+  mmDot(GEO.albion.x+530, GEO.albion.y+40);
+  $("#simbtn").style.opacity=.45;
+  toast(`▸ <b>packet-tracer</b> reported at Albion — camera held steady`);
+}
+setTimeout(()=>{ if(!reportFired) simulateReport(); }, 8000);
+
+/* ---------- workflow 3: fly + orient + decide ---------- */
+function flyToDecision(){
+  const d=WORLD.decisions.find(x=>x.id==="decision-gate-desync");
+  if(d.state!=="pending") return;
+  // frame the trail arc + decision card
+  flyTo(1180, 620, Math.min(Math.max((innerWidth/1300)*0.9, .55), 1.05));
+  $("#dcard-decision-gate-desync").classList.add("orienting");
+  if(!trailShown){
+    trailShown=true;
+    trailEls.forEach((el,i)=>setTimeout(()=>{
+      el.classList.add("shown");
+      if(edgeLines[i-1]) edgeLines[i-1].classList.add("shown");
+      if(i===trailEls.length-1) edgeLines[edgeLines.length-1].classList.add("shown");
+    }, 550+i*260));
+    setTimeout(()=>toast("evidence trail unrolled — read the cards along the path, then commit"), 700);
+  }
+}
+function commitDecision(id, idx){
+  const d=WORLD.decisions.find(x=>x.id===id);
+  if(d.state!=="pending") return;
+  d.state="resolved"; d.chosen=d.options[idx];
+  const card=$("#dcard-"+id);
+  card.classList.remove("orienting");
+  card.classList.add("resolved");
+  card.querySelector(".dl").innerHTML=`<span>✓ decision resolved</span><span>14:33</span>`;
+  card.querySelector(".dres").textContent="→ "+d.chosen;
+  if(id==="decision-gate-desync"){
+    trailEls.forEach(el=>el.classList.add("dim"));
+    const nav=projById("albion").agents.find(a=>a.id==="navigator");
+    nav.state="working"; delete nav.blockedOn;
+    const chip=$("#chip-navigator");
+    chip.classList.remove("blocked"); chip.classList.add("working");
+    chip.querySelector(".lr").textContent="14:33";
+    const el=document.createElement("div");
+    el.className="esticky";
+    el.style.cssText=`left:${GEO.albion.x+530}px;top:${GEO.albion.y+180}px`;
+    el.innerHTML=`<div class="el"><span>▸ navigator</span><span>14:33</span></div><div class="et">Unblocked — resuming gate routing via ${esc(d.chosen.split(":")[0].toLowerCase())}</div>`;
+    world.appendChild(el);
+    WORLD.events.push({ts:"14:33",proj:"albion",kind:"decision",t:"Decision committed: "+d.chosen});
+    toast(`✓ committed <b>${esc(d.chosen.split(":")[0])}</b> — navigator released`);
+  } else {
+    toast(`✓ committed <b>${esc(d.chosen)}</b>`);
+  }
+}
+
+/* ---------- chrome ---------- */
+function toast(html){
+  const el=document.createElement("div");
+  el.className="tst"; el.innerHTML=html;
+  $("#toast").appendChild(el);
+  setTimeout(()=>{ el.style.transition="opacity .4s"; el.style.opacity=0; setTimeout(()=>el.remove(),450); }, 4800);
+}
+function togglePop(which){
+  ["workflows","compare"].forEach(k=>{
+    const el=document.getElementById("pop-"+k);
+    if(k===which) el.classList.toggle("open"); else el.classList.remove("open");
+  });
+}
+document.addEventListener("keydown", e=>{
+  if(e.target.tagName==="INPUT") return;
+  if(e.key==="c"||e.key==="C"){ e.preventDefault(); openCapture(); }
+  if(e.key==="f"||e.key==="F") fitAll();
+  if(e.key==="Escape"){ closeCapture(); togglePop(null); }
+});
+window.addEventListener("resize", updateMinimapView);
+
+// decision cards on the minimap
+Object.values(DEC_POS).forEach(([x,y])=>mmDot(x,y));
+fitAll();
+world.classList.remove("flying"); // initial placement, no animation
+applyTransform();
+</script>
+</body>
+</html>

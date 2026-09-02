@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Commander — Wasm Building Programs</title>
+<style>
+  :root {
+    --bg: #070b08; --panel: #0d130e; --panel2: #111a13;
+    --line: #1d2b20; --line-hi: #3a5540;
+    --txt: #c8d6c9; --dim: #6e8272; --faint: #44543f;
+    --green: #7dff9a; --green-dk: #2f7a44; --amber: #e8b241; --red: #ff5c5c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--txt);
+    font: 15px/1.6 "JetBrains Mono", "Fira Mono", ui-monospace, monospace;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 40px 24px 80px; }
+  h1 { color: var(--green); font-size: 26px; letter-spacing: 1px; margin: 0 0 4px; }
+  .sub { color: var(--dim); font-size: 12.5px; margin-bottom: 36px; }
+  h2 {
+    color: var(--green); font-size: 15px; letter-spacing: 2px; text-transform: uppercase;
+    border-bottom: 1px solid var(--line-hi); padding-bottom: 6px; margin: 44px 0 14px;
+  }
+  h3 { color: var(--amber); font-size: 13.5px; letter-spacing: 1px; margin: 26px 0 8px; }
+  p { margin: 10px 0; }
+  a { color: var(--green); }
+  code {
+    background: var(--panel2); border: 1px solid var(--line);
+    padding: 1px 5px; border-radius: 3px; font-size: 13px; color: var(--txt);
+  }
+  pre {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+    padding: 14px 16px; overflow-x: auto; font-size: 13px; line-height: 1.5;
+  }
+  pre code { background: none; border: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; margin: 12px 0; }
+  th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--panel2); color: var(--green); font-weight: normal; letter-spacing: 1px; font-size: 11.5px; text-transform: uppercase; }
+  td code { white-space: nowrap; }
+  .callout {
+    border: 1px solid var(--line-hi); border-left: 3px solid var(--green);
+    background: var(--panel); padding: 10px 14px; border-radius: 3px; margin: 14px 0; font-size: 13.5px;
+  }
+  .warn { border-left-color: var(--amber); }
+  .k { color: var(--amber); }
+  .g { color: var(--green); }
+  .d { color: var(--dim); }
+  img.shot { max-width: 100%; border: 1px solid var(--line-hi); border-radius: 4px; margin: 10px 0; }
+  .toc { font-size: 13px; columns: 2; }
+  .toc a { text-decoration: none; color: var(--txt); }
+  .toc a:hover { color: var(--green); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>⚙ WASM BUILDING PROGRAMS</h1>
+<div class="sub">commander — RTS context HQ · docs/wasm-modules.html · updated 2026-08-26</div>
+
+<p>
+Each building on the map represents a <b>project, goal, or cluster of context</b>. Borrowing the
+central lesson from <b>SpacetimeDB</b> — ship the logic to where the state lives, as sandboxed wasm
+modules invoked by the host — every building can now install and run <b>wasm programs</b>: small
+sandboxed modules that poll for signals, reduce building state, and query http/https endpoints,
+each under an explicit budget.
+</p>
+
+<div class="callout">
+A building may run <b>multiple programs</b> at once. Programs are persisted with the building in
+<code>space.jsonl</code>, resume automatically on startup, and <b>hot-reload</b> when their file
+changes on disk — an AI agent (or you) can rewrite a program while the commander is running and the
+new version is live on its next tick.
+</div>
+
+<img class="shot" src="wasm-workflow.gif" alt="workflow: select base, programs ticking, hotload v2, pause faulty module">
+<p class="d">Workflow: select a base → programs tick on the card → <code>heartbeat.wat</code> rewritten on disk hotloads (signal text + status change) → the fuel-trapped <code>runaway</code> program is paused over the control API.</p>
+
+<h2 id="toc">Contents</h2>
+<div class="toc">
+  <p>
+  1. <a href="#model">Model — what a program is</a><br>
+  2. <a href="#lifecycle">Lifecycle &amp; scheduling</a><br>
+  3. <a href="#abi">Guest ABI reference</a><br>
+  4. <a href="#reducers">Reducer commands</a><br>
+  5. <a href="#budgets">Budgets</a><br>
+  6. <a href="#http">HTTP access</a><br>
+  7. <a href="#ctrl">Control API</a><br>
+  8. <a href="#agents">AI agents &amp; hotloading</a><br>
+  9. <a href="#samples">Sample programs</a><br>
+  10. <a href="#files">Source map</a>
+  </p>
+</div>
+
+<h2 id="model">1. Model — what a program is</h2>
+<p>
+A program is a <code>.wasm</code> or <code>.wat</code> file (wat is compiled on load) that exports:
+</p>
+<pre><code>(memory (export "memory") ...)          ;; linear memory the host reads/writes
+(func (export "tick") (result i32) ...) ;; called on the program's interval; 0 = ok</code></pre>
+<p>
+Its installation record lives on the building (<code>Project.modules</code> in
+<code>src/model.rs</code>):
+</p>
+<pre><code>{ "name": "probe",              // unique per building
+  "path": "mods/http_probe.wat",// relative to the commander working dir
+  "interval_sec": 15.0,         // min seconds between ticks   (default 60)
+  "fuel_per_tick": 50000000,    // wasm fuel budget per tick   (default 50M)
+  "max_http_per_tick": 4,       // http requests per tick      (default 4)
+  "max_http_resp_kib": 256,     // response body cap, KiB      (default 256)
+  "enabled": true }</code></pre>
+
+<h2 id="lifecycle">2. Lifecycle &amp; scheduling</h2>
+<p>
+The host (<code>src/wasm.rs</code>) runs all programs on a dedicated thread with a wasmtime engine
+(<code>consume_fuel</code> on). The app thread pushes a snapshot of every building — name, full
+state JSON, module configs — about once per second; the runtime reconciles:
+</p>
+<table>
+<tr><th>event</th><th>behavior</th></tr>
+<tr><td>program installed / building placed</td><td>compile + instantiate, first tick immediately</td></tr>
+<tr><td>program removed / building destroyed</td><td>instance dropped</td></tr>
+<tr><td>config changed (budgets, path, interval)</td><td>instance rebuilt with the new config</td></tr>
+<tr><td>module file mtime changed</td><td><b>hot reload</b> — recompiled and reinstantiated (~200&nbsp;ms poll)</td></tr>
+<tr><td>compile/instantiate failure</td><td>reported once as a <code>FAULT</code>; retried only when the file or config changes</td></tr>
+<tr><td>disabled (<code>enabled: false</code>)</td><td>instance dropped; re-enabling rebuilds it fresh</td></tr>
+</table>
+<p>
+Each due tick: the program's host context gets the latest building state JSON, its http counter and
+scratch reset, its fuel tank refilled to <code>fuel_per_tick</code>, then <code>tick()</code> runs.
+Outputs (signals, reducer commands, logs, and a run report with fuel/http/ms spent) flow back to the
+app thread, which applies them to the world — signals enter the building's event feed exactly like
+agent reports (pings, toasts, "since you left" deltas), reducers mutate state, and everything
+autosaves to <code>space.jsonl</code>.
+</p>
+
+<h2 id="abi">3. Guest ABI reference</h2>
+<p>All imports are under the module name <code>"commander"</code>. Strings are (ptr, len) pairs into the guest's exported memory, UTF-8.</p>
+<table>
+<tr><th>import</th><th>signature</th><th>meaning</th></tr>
+<tr><td><code>log</code></td><td><code>(ptr, len)</code></td><td>debug line → stderr + the card's <span class="d">log:</span> row</td></tr>
+<tr><td><code>signal</code></td><td><code>(ptr, len)</code></td><td>emit an event into the building's feed (ping + toast + delta)</td></tr>
+<tr><td><code>reduce</code></td><td><code>(ptr, len)</code></td><td>JSON reducer command applied to building state (<a href="#reducers">§4</a>)</td></tr>
+<tr><td><code>state</code></td><td><code>() → i64</code></td><td>load the building's state JSON into the host scratch; returns its length</td></tr>
+<tr><td><code>http</code></td><td><code>(mp, ml, up, ul, bp, bl) → i64</code></td><td>perform <i>METHOD url [body]</i>; scratch = response body; returns length, <code>-1</code> error, <code>-2</code> http budget spent</td></tr>
+<tr><td><code>read</code></td><td><code>(ptr, cap) → i32</code></td><td>copy the scratch (state or http response) into guest memory; returns bytes copied</td></tr>
+</table>
+<p>
+The <b>scratch</b> is a per-instance host buffer: <code>state</code>/<code>http</code> fill it and
+return the length; the guest then calls <code>read</code> with a buffer of its choosing. A short
+buffer simply truncates — no second fetch happens.
+</p>
+<p>The building state JSON handed to <code>state</code> is the full serialized project:</p>
+<pre><code>{"name":"zeus","status":"wasm-ok","goal":"","agents":[...],"tasks":[...],
+ "modules":[...],"pos":[...], ...}</code></pre>
+
+<h2 id="reducers">4. Reducer commands</h2>
+<p>
+A reducer is a JSON object passed to <code>reduce</code>. It is applied transactionally on the app
+thread (never mid-frame, never racing the UI) and marks the space dirty for autosave. Unknown ops
+are logged and ignored.
+</p>
+<table>
+<tr><th>op</th><th>fields</th><th>effect</th></tr>
+<tr><td><code>status</code></td><td><code>value</code></td><td>set the building's status line</td></tr>
+<tr><td><code>goal</code></td><td><code>value</code></td><td>set the building's objective</td></tr>
+<tr><td><code>task</code></td><td><code>title, state, x?, y?, notes?</code></td><td>upsert a task (a <a href="structures.html">goal pylon</a> in the world); state ∈ <code>todo · doing · done · blocked</code>; x/y set its world anchor; notes replaces the pylon's brief (title is only its name)</td></tr>
+<tr><td><code>task_remove</code></td><td><code>title</code></td><td>remove a task (its pylon warps out)</td></tr>
+<tr><td><code>question</code></td><td><code>text, resolved?, x?, y?, notes?</code></td><td>upsert a question (a <a href="structures.html">sensor array</a> in the world); omit resolved to leave it as-is on update; notes replaces its brief</td></tr>
+<tr><td><code>question_remove</code></td><td><code>text</code></td><td>remove a question</td></tr>
+<tr><td><code>agent</code></td><td><code>id, state?, task?, blocked_on?</code></td><td>upsert a unit; state ∈ <code>working · blocked · idle</code>; stamps <code>last_report</code></td></tr>
+<tr><td><code>agent_remove</code></td><td><code>id</code></td><td>remove a unit</td></tr>
+</table>
+
+<h2 id="budgets">5. Budgets</h2>
+<p>Every budget is enforced per tick, per program — one program can never starve the others or the UI:</p>
+<table>
+<tr><th>budget</th><th>mechanism</th><th>on exhaustion</th></tr>
+<tr><td>compute</td><td>wasmtime fuel metering (<code>fuel_per_tick</code>)</td><td>tick traps — card shows <span style="color:var(--red)">FAULT · trap: all fuel consumed by WebAssembly</span>; next tick gets a fresh tank</td></tr>
+<tr><td>http calls</td><td>counter (<code>max_http_per_tick</code>)</td><td><code>http</code> returns <code>-2</code></td></tr>
+<tr><td>http body</td><td>read cap (<code>max_http_resp_kib</code>)</td><td>body truncated at the cap</td></tr>
+<tr><td>cadence</td><td><code>interval_sec</code> (min 1s)</td><td>tick simply isn't scheduled yet</td></tr>
+<tr><td>output flood</td><td>64 signals/reducers/logs per tick</td><td>excess dropped</td></tr>
+<tr><td>wall clock</td><td>10&nbsp;s timeout per http request</td><td>request fails (<code>-1</code>)</td></tr>
+</table>
+<p class="d">
+The card shows spend next to budget after every run:
+<code>budget: 15s · 50M fuel · 2 http · last: 153.4ms, 0M fuel, 1 http</code>.
+</p>
+
+<h2 id="http">6. HTTP access</h2>
+<p>
+Programs may query <code>http://</code> and <code>https://</code> endpoints (anything else is
+rejected with <code>-1</code>). Requests run blocking on the wasm thread via <code>ureq</code>;
+non-2xx responses still return their body — the program decides what a 404 means. Any method is
+allowed; an empty method string defaults to <code>GET</code>; a non-empty body is sent as the
+request body.
+</p>
+
+<h2 id="ctrl">7. Control API</h2>
+<p>Programs are managed at runtime over the existing control server (<code>COMMANDER_HTTP</code>, default <code>127.0.0.1:7700</code>):</p>
+<pre><code># install a program into base 0
+curl "localhost:7700/module_add?i=0&amp;name=probe&amp;path=mods/http_probe.wat\
+&amp;interval=15&amp;fuel=50000000&amp;http=2&amp;http_kib=256"
+
+# pause / resume
+curl "localhost:7700/module_toggle?i=0&amp;name=probe"
+
+# uninstall
+curl "localhost:7700/module_rm?i=0&amp;name=probe"
+
+# observe: per-module ticks, fuel/http spend, ms, last error
+curl localhost:7700/state | jq '.projects[0].modules'</code></pre>
+<p>
+The card offers the same controls per program: <code>⏸/▶</code> pause–resume and <code>✕</code>
+uninstall, plus live status (<span class="g">N TICKS</span> · <span class="d">PAUSED</span> ·
+<span style="color:var(--red)">FAULT</span>), budgets vs. actual spend, last log line, and last error.
+</p>
+
+<h2 id="agents">8. AI agents &amp; hotloading</h2>
+<p>Yes — agents can hotload programs on a running commander, two ways:</p>
+<p>
+<b>File watch.</b> The runtime tracks each program file's mtime. An agent that rewrites
+<code>mods/foo.wat</code> (or drops in a freshly compiled <code>.wasm</code>) gets the new version
+compiled, instantiated, and ticking within ~200&nbsp;ms — no restart, no reinstall, and the
+building's state is untouched. This is the loop the GIF above shows.
+</p>
+<p>
+<b>Control API.</b> <code>/module_add</code> · <code>/module_rm</code> · <code>/module_toggle</code>
+let an agent install new capabilities into any building, swap implementations by uninstalling and
+reinstalling under a different path, or pause a misbehaving program — and <code>/state</code> closes
+the loop by exposing every program's tick count, spend, and last error for the agent to read back.
+</p>
+<div class="callout warn">
+Programs keep no in-memory state across reloads (a rebuilt instance starts fresh). Durable state
+belongs in the building itself — write it with reducers, read it back with <code>state</code>.
+That is the spacetimedb lesson applied: the module is pure logic, the building owns the data.
+</div>
+
+<h2 id="samples">9. Sample programs (<code>commander/mods/</code>)</h2>
+<h3>heartbeat.wat</h3>
+<p>Smallest useful program: reads building state, logs a prefix, emits a signal, reduces status.</p>
+<pre><code>(module
+  (import "commander" "signal" (func $signal (param i32 i32)))
+  (import "commander" "reduce" (func $reduce (param i32 i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 16) "heartbeat v2 hotloaded")
+  (data (i32.const 64) "{\"op\":\"status\",\"value\":\"wasm-v2\"}")
+  (func (export "tick") (result i32)
+    (call $signal (i32.const 16) (i32.const 22))
+    (call $reduce (i32.const 64) (i32.const 33))
+    (i32.const 0)))</code></pre>
+<h3>http_probe.wat</h3>
+<p>Polls an https endpoint; reduces the <i>http probe</i> task to <code>done</code> or <code>blocked</code> and signals the result.</p>
+<h3>runaway.wat</h3>
+<p>Spins forever — exists to demonstrate the fuel budget trapping a tick while the rest of the base keeps running.</p>
+<p class="d">
+Anything that compiles to wasm works the same — Rust via <code>cargo build --target wasm32-unknown-unknown</code>
+with <code>extern "C"</code> imports matching §3, C via clang, or hand-written wat as above.
+</p>
+
+<h2 id="files">10. Source map</h2>
+<table>
+<tr><th>file</th><th>role</th></tr>
+<tr><td><code>commander/src/wasm.rs</code></td><td>module host: engine, ABI imports, scheduler, budgets, hot reload</td></tr>
+<tr><td><code>commander/src/model.rs</code></td><td><code>ModuleCfg</code>, <code>Project.modules</code></td></tr>
+<tr><td><code>commander/src/app.rs</code></td><td>output pump (<code>wasm_pump</code>), reducer application (<code>apply_wasm_reduce</code>), snapshot sync (<code>wasm_sync</code>), card UI, control commands</td></tr>
+<tr><td><code>commander/src/ctrl.rs</code></td><td><code>/module_add</code> · <code>/module_rm</code> · <code>/module_toggle</code> endpoints</td></tr>
+<tr><td><code>commander/mods/</code></td><td>sample programs</td></tr>
+</table>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Timeline Journal — Context Ops</title>
+<style>
+  :root{
+    --paper:#221c14; --paper2:#2a231a; --ink:#eadfc8; --ink-dim:#a5977d; --ink-faint:#6e6350;
+    --line:#3a3226; --line-soft:#332c21; --flag:#e0a458; --flagred:#d96a55;
+    --serif:Charter,"Iowan Old Style","Palatino Linotype",Georgia,"Times New Roman",serif;
+    --sans:ui-sans-serif,system-ui,"Segoe UI",sans-serif;
+    --mono:ui-monospace,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    background:var(--paper); color:var(--ink); font-family:var(--serif);
+    font-size:15px; line-height:1.75;
+    background-image:
+      radial-gradient(ellipse 1200px 500px at 50% -100px, #2d2519 0%, transparent 70%),
+      repeating-linear-gradient(0deg, transparent 0 3px, rgba(0,0,0,.05) 3px 4px);
+  }
+  a{color:#c9a86a;text-decoration:none}
+  button{cursor:pointer;font-family:var(--sans)}
+  .micro{font-family:var(--sans);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-faint)}
+
+  /* ===== masthead ===== */
+  #mast{position:sticky;top:0;z-index:30;background:linear-gradient(#241e15 70%,rgba(36,30,21,.94));
+    border-bottom:1px solid var(--line);backdrop-filter:blur(3px)}
+  #mast-inner{max-width:860px;margin:0 auto;padding:10px 20px 6px}
+  #mast-row{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
+  #mast h1{font-size:19px;font-weight:600;letter-spacing:.02em;font-style:italic}
+  #mast .subtitle{font-size:12px;color:var(--ink-dim);font-style:italic}
+  #mast-btns{margin-left:auto;display:flex;gap:8px;align-items:center}
+  .mbtn{background:none;border:1px solid var(--line);color:var(--ink-dim);border-radius:14px;
+    padding:3px 11px;font-size:10.5px;letter-spacing:.06em;transition:all .15s}
+  .mbtn:hover{color:var(--flag);border-color:var(--flag)}
+
+  /* ===== minimap scrubber ===== */
+  #scrub{max-width:860px;margin:8px auto 0;padding:0 20px 10px}
+  #scrub-grid{display:grid;grid-template-columns:86px repeat(4,1fr);gap:2px;align-items:center}
+  .sc-head{font-family:var(--sans);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;
+    text-align:center;color:var(--ink-faint);padding:2px 0;cursor:pointer;border-radius:3px;transition:all .15s}
+  .sc-head:hover{color:var(--flag);background:var(--paper2)}
+  .sc-head.current{color:var(--flag)}
+  .sc-label{font-family:var(--sans);font-size:9.5px;color:var(--ink-faint);text-align:right;padding-right:8px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sc-cell{height:14px;display:flex;align-items:center;justify-content:center;gap:2.5px;cursor:pointer;
+    border-radius:3px;transition:background .15s}
+  .sc-cell:hover{background:var(--paper2)}
+  .sc-dot{width:5px;height:5px;border-radius:50%;opacity:.9}
+  .sc-flagpin{font-size:9px;line-height:1}
+
+  /* ===== stream ===== */
+  #stream{max-width:860px;margin:0 auto;padding:26px 20px 150px}
+  .day-sep{display:flex;align-items:center;gap:14px;margin:34px 0 18px}
+  .day-sep:first-child{margin-top:0}
+  .day-sep .rule{flex:1;height:1px;background:var(--line)}
+  .day-sep .d{font-family:var(--sans);font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--ink-dim)}
+
+  .entry{display:flex;gap:16px;padding:7px 4px;border-radius:4px;transition:background .2s, opacity .3s;position:relative}
+  .entry:hover{background:rgba(255,255,255,.02)}
+  .gutter{flex:none;width:4px;border-radius:2px;margin:5px 0}
+  .e-ts{flex:none;width:52px;text-align:right;font-family:var(--mono);font-size:11px;color:var(--ink-faint);padding-top:5px}
+  .e-main{flex:1;min-width:0}
+  .e-src{font-family:var(--sans);font-size:10px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:1px}
+  .e-src .agent{color:var(--ink-dim)}
+  .e-body{font-size:15px;color:var(--ink)}
+  .entry.k-capture .e-body{font-style:italic;color:#d9cdb2}
+  .entry.k-capture .e-src::after{content:" · unfiled";color:var(--ink-faint);letter-spacing:.06em;text-transform:none}
+  .entry.k-context .e-body{color:#d4c8ae}
+  .entry.k-blocked .e-body{color:#e8a79a}
+  .entry.new-entry{animation:inkfade 1.2s ease-out}
+  @keyframes inkfade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+  /* decision flag pins */
+  .entry.k-flag{cursor:pointer;border:1px dashed transparent}
+  .entry.k-flag:hover{background:rgba(224,164,88,.06);border-color:rgba(224,164,88,.35)}
+  .flagpin{flex:none;width:52px;text-align:right;font-size:15px;padding-top:2px}
+  .entry.k-flag .e-body{font-family:var(--sans);font-size:13.5px;color:var(--flag);font-weight:600;letter-spacing:.01em}
+  .entry.k-flag .e-opts{font-size:12.5px;color:var(--ink-dim);font-family:var(--serif);font-style:italic;margin-top:1px}
+  .entry.k-flag.resolved .e-body{color:#9dc08b}
+  .entry.k-flag.resolved{cursor:default}
+  .entry.k-flag .duechip{display:inline-block;font-family:var(--sans);font-size:9px;letter-spacing:.12em;
+    text-transform:uppercase;border:1px solid var(--flagred);color:var(--flagred);border-radius:10px;
+    padding:0 7px;margin-left:8px;vertical-align:2px}
+
+  /* ===== replay mode ===== */
+  body.replay #stream .entry:not(.in-thread){opacity:.13;pointer-events:none}
+  body.replay #stream .day-sep{opacity:.35}
+  .entry.in-thread.replay-current{background:rgba(224,164,88,.1);outline:1px solid rgba(224,164,88,.5);outline-offset:-1px}
+  .entry.in-thread.replay-past{opacity:.85}
+  body.replay .entry.in-thread.replay-future{opacity:.35}
+  #replaybar{position:fixed;left:50%;transform:translate(-50%,130%);bottom:64px;z-index:50;
+    background:#2c2419;border:1px solid var(--flag);border-radius:10px;box-shadow:0 14px 44px rgba(0,0,0,.55);
+    padding:12px 16px;width:min(720px,94vw);transition:transform .35s cubic-bezier(.2,.8,.25,1)}
+  body.replay #replaybar{transform:translate(-50%,0)}
+  #rb-top{display:flex;align-items:center;gap:12px}
+  #rb-title{font-family:var(--sans);font-size:12px;color:var(--flag);letter-spacing:.04em;font-weight:600;flex:1}
+  #rb-step{font-family:var(--mono);font-size:11px;color:var(--ink-dim)}
+  .rb-nav{background:none;border:1px solid var(--line);color:var(--ink);border-radius:6px;width:34px;height:28px;
+    font-size:15px;transition:all .15s}
+  .rb-nav:hover{border-color:var(--flag);color:var(--flag)}
+  .rb-nav:disabled{opacity:.3;cursor:default}
+  #rb-close{background:none;border:none;color:var(--ink-faint);font-size:16px;padding:0 2px}
+  #rb-close:hover{color:var(--ink)}
+  #rb-commit{display:flex;gap:8px;margin-top:10px;padding-top:10px;border-top:1px solid var(--line-soft)}
+  .rb-choice{flex:1;background:#332a1d;border:1px solid var(--line);color:var(--ink);border-radius:7px;
+    padding:8px 10px;font-size:12px;line-height:1.4;text-align:left;transition:all .15s}
+  .rb-choice b{display:block;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--flag);margin-bottom:2px}
+  .rb-choice:hover{border-color:var(--flag);background:#3a2f1f}
+  #rb-hint{font-family:var(--sans);font-size:10.5px;color:var(--ink-faint);margin-top:6px;font-style:italic}
+
+  /* ===== capture line ===== */
+  #capline{position:fixed;left:0;right:0;bottom:0;z-index:40;background:linear-gradient(transparent,#1d1710 26%);
+    padding:26px 20px 14px}
+  #capline-inner{max-width:860px;margin:0 auto;display:flex;gap:12px;align-items:baseline}
+  #capline .pen{color:var(--ink-faint);font-size:15px}
+  #capinput{flex:1;background:none;border:none;border-bottom:1px solid var(--line);color:var(--ink);
+    font-family:var(--serif);font-style:italic;font-size:15px;padding:6px 2px;outline:none;transition:border-color .2s}
+  #capinput:focus{border-color:var(--flag)}
+  #capinput::placeholder{color:var(--ink-faint);font-style:italic}
+  #capline .k{font-family:var(--sans);font-size:9.5px;color:var(--ink-faint);letter-spacing:.08em;white-space:nowrap}
+  #capline .k kbd{border:1px solid var(--line);border-radius:3px;padding:0 4px}
+
+  /* new-entry pill */
+  #newpill{position:fixed;left:50%;transform:translateX(-50%);bottom:70px;z-index:45;background:#33291a;
+    border:1px solid var(--flag);color:var(--flag);border-radius:16px;padding:5px 16px;font-family:var(--sans);
+    font-size:11px;letter-spacing:.05em;display:none;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+  #newpill:hover{background:#3d301d}
+
+  /* ===== popovers ===== */
+  .pop{position:fixed;top:52px;right:16px;width:340px;background:#2b2318;border:1px solid var(--line);
+    border-radius:8px;padding:14px 16px;z-index:60;display:none;box-shadow:0 14px 44px rgba(0,0,0,.6);
+    font-family:var(--sans);font-size:12px;line-height:1.6}
+  .pop.open{display:block}
+  .pop h4{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--flag);margin:9px 0 4px}
+  .pop h4:first-child{margin-top:0}
+  .pop li{margin-left:16px;color:var(--ink-dim);margin-bottom:3px}
+  .pop b{color:var(--ink)}
+  .pop kbd{border:1px solid var(--line);border-radius:3px;padding:0 4px;font-size:11px}
+</style>
+</head>
+<body>
+
+<div id="mast">
+  <div id="mast-inner">
+    <div id="mast-row">
+      <h1>The Daybook</h1>
+      <span class="subtitle">one honest chronology — everything that happened, in the order it happened</span>
+      <div id="mast-btns">
+        <button class="mbtn" onclick="focusCapture()">✎ capture <span style="opacity:.6">(c)</span></button>
+        <button class="mbtn" id="simbtn" onclick="simulateReport()">▶ simulate report</button>
+        <button class="mbtn" onclick="togglePop('workflows')">? workflows</button>
+        <button class="mbtn" onclick="togglePop('compare')">ⓘ compare</button>
+        <a href="index.html" style="font-family:var(--sans);font-size:11px">← index</a>
+      </div>
+    </div>
+    <div id="scrub"><div id="scrub-grid"></div></div>
+  </div>
+</div>
+
+<div id="stream"></div>
+
+<div id="replaybar">
+  <div id="rb-top">
+    <span style="font-size:14px">⚑</span>
+    <span id="rb-title">Replaying: Gate desync fix — restart-probe vs re-handshake</span>
+    <span id="rb-step">1 / 10</span>
+    <button class="rb-nav" id="rb-prev" onclick="replayStep(-1)">‹</button>
+    <button class="rb-nav" id="rb-next" onclick="replayStep(1)">›</button>
+    <button id="rb-close" onclick="exitReplay()" title="exit replay">✕</button>
+  </div>
+  <div id="rb-commit">
+    <button class="rb-choice" onclick="commitDecision(0)"><b>Choose restart-probe</b>auto-restart client after each gate to resync</button>
+    <button class="rb-choice" onclick="commitDecision(1)"><b>Choose re-handshake</b>reverse-engineer &amp; replay the gate handshake packets</button>
+  </div>
+  <div id="rb-hint">Step through the thread with ‹ › (or arrow keys) — the stream is filtered to this decision's history.</div>
+</div>
+
+<button id="newpill" onclick="jumpToBottom()">↓ new entry below</button>
+
+<div id="capline">
+  <div id="capline-inner">
+    <span class="pen">✎</span>
+    <input id="capinput" placeholder="Write it down — no filing needed, it joins today's page…" autocomplete="off">
+    <span class="k"><kbd>c</kbd> focus · <kbd>enter</kbd> commit</span>
+  </div>
+</div>
+
+<div class="pop" id="pop-workflows">
+  <h4>Try the workflows</h4>
+  <li><b>Capture</b> — press <kbd>c</kbd> (or click the ✎ line at the bottom), type, hit Enter. The thought is inked at the end of today — unfiled, but timestamped.</li>
+  <li><b>Agent report</b> — click <b>▶ simulate report</b> (or wait ~8s). A new entry fades in at the bottom; if you've scrolled up, a pill offers the jump.</li>
+  <li><b>Orient &amp; decide</b> — click the amber <b>⚑ decision flag</b> at the end of today (or its pin in the mini-map). Replay mode filters the page to that thread; step through it, then commit.</li>
+</div>
+<div class="pop" id="pop-compare">
+  <h4>Strengths</h4>
+  <li>Time is the one structure you never have to maintain — everything has exactly one place.</li>
+  <li>Replay mode turns re-orientation into literal re-reading of the actual history.</li>
+  <li>Cross-project interleaving surfaces rhythms a per-project view hides.</li>
+  <h4>Weaknesses</h4>
+  <li>Current state ("where is project X now?") must be reconstructed by reading.</li>
+  <li>Busy projects drown quiet ones in the shared stream.</li>
+  <li>Long threads scatter across days — replay helps, but only for flagged decisions.</li>
+</div>
+
+<script>
+const WORLD = {
+  now: "2026-08-22T14:30:00",
+  projects: [
+    { id: "albion", name: "Albion Automation", color: "#e0a458",
+      status: "active", goal: "Fully autonomous gathering + market loop",
+      agents: [
+        { id: "packet-tracer", name: "packet-tracer", state: "working",
+          task: "Instrument gate transition packets", lastReport: "12:41" },
+        { id: "navigator", name: "navigator", state: "blocked",
+          task: "Cross-map routing through gates", lastReport: "11:58",
+          blockedOn: "decision-gate-desync" },
+        { id: "market-bot", name: "market-bot", state: "idle",
+          task: "Waiting on price feed refactor", lastReport: "09:12" }
+      ],
+      tasks: [
+        { t: "Fix gate desync", state: "blocked" },
+        { t: "Price feed refactor", state: "todo" },
+        { t: "Resource route optimizer", state: "done" }
+      ]},
+    { id: "homelab", name: "Homelab Migration", color: "#6fb3d2",
+      status: "active", goal: "Move all services from old NUC to Proxmox cluster",
+      agents: [
+        { id: "infra-agent", name: "infra-agent", state: "working",
+          task: "Migrating Postgres volumes to new ZFS pool", lastReport: "14:07" }
+      ],
+      tasks: [
+        { t: "Migrate Postgres volumes", state: "doing" },
+        { t: "Move reverse proxy + certs", state: "todo" },
+        { t: "Decommission old NUC", state: "todo" }
+      ]},
+    { id: "paper", name: "Anomaly Detection Paper", color: "#b58ee0",
+      status: "deadline", goal: "Submit to conference — deadline Sep 5",
+      agents: [],
+      tasks: [
+        { t: "Rerun eval on v2 dataset", state: "doing" },
+        { t: "Write related-work section", state: "todo" },
+        { t: "Address advisor comments", state: "blocked" }
+      ]},
+    { id: "apartment", name: "Apartment Hunt", color: "#7fc98a",
+      status: "background", goal: "Find 2br under budget before Nov",
+      agents: [],
+      tasks: [
+        { t: "Visit Riverside listing", state: "todo" },
+        { t: "Compare commute times", state: "todo" }
+      ]}
+  ],
+  captures: [ // unclassified quick captures
+    { t: "idea: agents should emit confidence with every status report", ts: "13:22" },
+    { t: "check if ZFS snapshot schedule survives migration", ts: "10:45" },
+    { t: "landlord mentioned garage option?? follow up", ts: "yesterday" }
+  ],
+  events: [ // newest last
+    { ts: "09:12", proj: "albion", agent: "market-bot", kind: "status", t: "Paused: price feed schema changed upstream, refactor needed" },
+    { ts: "10:03", proj: "paper", kind: "note", t: "Advisor replied: eval section needs v2 dataset numbers" },
+    { ts: "10:45", proj: null, kind: "capture", t: "check if ZFS snapshot schedule survives migration" },
+    { ts: "11:20", proj: "albion", agent: "packet-tracer", kind: "status", t: "Gate-probe run #2: emitted 1 move, restarted client — server position UNCHANGED" },
+    { ts: "11:58", proj: "albion", agent: "navigator", kind: "blocked", t: "Blocked: cannot route through gates until desync strategy chosen" },
+    { ts: "12:41", proj: "albion", agent: "packet-tracer", kind: "status", t: "Gate-probe run #3: same result. Server never applied any move after gate transition" },
+    { ts: "13:22", proj: null, kind: "capture", t: "idea: agents should emit confidence with every status report" },
+    { ts: "14:07", proj: "homelab", agent: "infra-agent", kind: "status", t: "Postgres volume 2/5 migrated, ETA 40m for remainder" }
+  ],
+  decisions: [
+    { id: "decision-gate-desync", proj: "albion", state: "pending",
+      title: "Gate desync fix: restart-probe vs re-handshake",
+      options: ["Restart-probe: auto-restart client after each gate to resync",
+                "Re-handshake: reverse-engineer and replay the gate handshake packets"],
+      due: "today" },
+    { id: "decision-eval-scope", proj: "paper", state: "pending",
+      title: "Eval scope: rerun full grid or only v2 delta",
+      options: ["Full grid (2 days compute)", "v2 delta only (4h, weaker claim)"],
+      due: "Aug 25" }
+  ],
+  decisionContext: [ // accumulated context behind the gate-desync decision, oldest first
+    { ts: "Aug 19 16:10", t: "navigator first reported chars 'rubber-banding' to gate entrance after transitions" },
+    { ts: "Aug 19 18:34", t: "hypothesis 1: movement-lock flag not cleared — DISPROVEN (flag clears in packet trace)" },
+    { ts: "Aug 20 11:02", t: "hypothesis 2: reliable-seq collision after zone load — DISPROVEN (seqs contiguous)" },
+    { ts: "Aug 20 15:47", t: "key insight: all movement after gate is client-side prediction; server acks contain no position echo" },
+    { ts: "Aug 21 12:30", t: "restart experiment: emit 1 move, restart client, read authoritative resume position → server never moved the char" },
+    { ts: "Aug 21 12:55", t: "conclusion: server drops move stream after gate until a fresh handshake occurs. Two viable fixes identified" },
+    { ts: "Aug 22 12:41", t: "packet-tracer run #3 confirms: reproducible 3/3 times" }
+  ],
+  incomingReport: { ts: "14:31", proj: "albion", agent: "packet-tracer", kind: "status",
+    t: "Gate-probe run #4 complete: server pos unchanged after 3 moves — desync confirmed at handshake layer" }
+};
+
+/* ---------- build the unified stream (oldest → newest, newest at bottom) ---------- */
+const DAYS = ["Tue · Aug 19","Wed · Aug 20","Thu · Aug 21","Today · Fri Aug 22"];
+const stream = [];
+// Aug 19–21: the decision's field notes + yesterday's capture, in chronology
+WORLD.decisionContext.slice(0,6).forEach(c=>{
+  const day = c.ts.startsWith("Aug 19") ? 0 : c.ts.startsWith("Aug 20") ? 1 : 2;
+  stream.push({ day, ts:c.ts.slice(7), proj:"albion", agent:"field note", kind:"context", t:c.t, thread:true });
+});
+stream.splice(6,0,{ day:2, ts:"19:40", proj:null, kind:"capture", t:"landlord mentioned garage option?? follow up", thread:false });
+// Today: WORLD.events verbatim; albion gate-thread events tagged
+const THREAD_TS = new Set(["11:20","11:58","12:41"]);
+WORLD.events.forEach(e=>{
+  stream.push({ day:3, ts:e.ts, proj:e.proj, agent:e.agent, kind:e.kind, t:e.t,
+    thread: e.proj==="albion" && THREAD_TS.has(e.ts) });
+});
+// decision flag pins
+stream.splice(stream.findIndex(s=>s.day===3&&s.ts==="10:03")+1, 0,
+  { day:3, ts:"10:03", kind:"flag", decId:"decision-eval-scope", thread:false });
+stream.push({ day:3, ts:"14:30", kind:"flag", decId:"decision-gate-desync", thread:true });
+
+/* ---------- render ---------- */
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+const projById = id => WORLD.projects.find(p=>p.id===id);
+const decById = id => WORLD.decisions.find(d=>d.id===id);
+let reportFired=false, replayOn=false, replayIdx=0, replayItems=[];
+
+function entryNode(s){
+  const el = document.createElement("div");
+  if(s.kind==="flag"){
+    const d = decById(s.decId), p = projById(d.proj);
+    el.className = "entry k-flag" + (s.thread?" in-thread":"") + (d.state==="resolved"?" resolved":"");
+    el.dataset.dec = d.id;
+    el.innerHTML = `<span class="gutter" style="background:${p.color}"></span>
+      <span class="flagpin" style="color:${d.state==="resolved"?"#9dc08b":"var(--flagred)"}">⚑</span>
+      <div class="e-main">
+        <div class="e-src" style="color:${p.color}">${esc(p.name)} · decision ${d.state}</div>
+        <div class="e-body">${esc(d.title)}${d.state==="pending"?`<span class="duechip">due ${esc(d.due)}</span>`:""}</div>
+        <div class="e-opts">${d.state==="resolved" ? "✓ "+esc(d.chosen)
+          : esc(d.options[0].split(":")[0])+" — or — "+esc(d.options[1].split(":")[0])
+          + (d.id==="decision-gate-desync" ? " · click to replay the thread ▸" : "")}</div>
+      </div>`;
+    if(d.id==="decision-gate-desync") el.onclick = ()=>{ if(d.state==="pending") enterReplay(); };
+    return el;
+  }
+  const p = s.proj ? projById(s.proj) : null;
+  el.className = `entry k-${s.kind}` + (s.thread?" in-thread":"");
+  el.innerHTML = `<span class="gutter" style="background:${p?p.color:"#55503f"}"></span>
+    <span class="e-ts">${esc(s.ts)}</span>
+    <div class="e-main">
+      <div class="e-src" style="color:${p?p.color:"var(--ink-faint)"}">${p?esc(p.name):"margin note"}${s.agent?` <span class="agent">/ ${esc(s.agent)}</span>`:""}</div>
+      <div class="e-body">${esc(s.t)}</div>
+    </div>`;
+  return el;
+}
+
+function renderStream(){
+  const host = $("#stream"); host.innerHTML = "";
+  let curDay = -1;
+  stream.forEach(s=>{
+    if(s.day !== curDay){
+      curDay = s.day;
+      const sep = document.createElement("div");
+      sep.className = "day-sep"; sep.id = "day-"+curDay;
+      sep.innerHTML = `<span class="rule"></span><span class="d">${DAYS[curDay]}</span><span class="rule"></span>`;
+      host.appendChild(sep);
+    }
+    host.appendChild(s.node = entryNode(s));
+  });
+}
+
+/* ---------- minimap scrubber ---------- */
+const ROWS = [...WORLD.projects.map(p=>({id:p.id,name:p.name,color:p.color})), {id:null,name:"margin notes",color:"#8a8069"}];
+function renderScrub(){
+  const g = $("#scrub-grid"); g.innerHTML = "";
+  g.appendChild(document.createElement("span"));
+  DAYS.forEach((d,i)=>{
+    const h = document.createElement("div");
+    h.className = "sc-head"; h.id = "schead-"+i;
+    h.textContent = d.replace(/^\w+ · /,"");
+    h.onclick = ()=>scrollToDay(i);
+    g.appendChild(h);
+  });
+  ROWS.forEach(r=>{
+    const lab = document.createElement("div");
+    lab.className = "sc-label"; lab.textContent = r.name; lab.style.color = r.color;
+    g.appendChild(lab);
+    for(let d=0; d<4; d++){
+      const cell = document.createElement("div");
+      cell.className = "sc-cell"; cell.onclick = ()=>scrollToDay(d);
+      const items = stream.filter(s=>s.day===d && (s.kind==="flag" ? decById(s.decId).proj===r.id : (s.proj??null)===r.id));
+      items.forEach(s=>{
+        if(s.kind==="flag"){
+          const f = document.createElement("span");
+          f.className="sc-flagpin"; f.textContent="⚑";
+          f.style.color = decById(s.decId).state==="resolved" ? "#9dc08b" : "var(--flagred)";
+          f.title = decById(s.decId).title;
+          cell.appendChild(f);
+        } else {
+          const dot = document.createElement("span");
+          dot.className="sc-dot"; dot.style.background = r.color;
+          cell.appendChild(dot);
+        }
+      });
+      g.appendChild(cell);
+    }
+  });
+}
+function scrollToDay(i){
+  const el = document.getElementById("day-"+i);
+  if(el) window.scrollTo({top: el.getBoundingClientRect().top + window.scrollY - 150, behavior:"smooth"});
+}
+window.addEventListener("scroll", ()=>{
+  let cur = 0;
+  for(let i=0;i<4;i++){
+    const el = document.getElementById("day-"+i);
+    if(el && el.getBoundingClientRect().top < 170) cur = i;
+  }
+  for(let i=0;i<4;i++) document.getElementById("schead-"+i)?.classList.toggle("current", i===cur);
+  if(nearBottom()) $("#newpill").style.display="none";
+});
+
+/* ---------- workflow 1: capture ---------- */
+function focusCapture(){ $("#capinput").focus(); }
+function submitCapture(){
+  const v = $("#capinput").value.trim();
+  if(!v) return;
+  const s = { day:3, ts:nowTs(), proj:null, kind:"capture", t:v, thread:false };
+  appendToStream(s);
+  WORLD.captures.unshift({ t:v, ts:s.ts });
+  $("#capinput").value = "";
+  renderScrub();
+  jumpToBottom();
+}
+$("#capinput").addEventListener("keydown", e=>{
+  if(e.key==="Enter") submitCapture();
+  if(e.key==="Escape") e.target.blur();
+});
+let fakeMin = 0;
+function nowTs(){ fakeMin++; const m = 32+fakeMin; return "14:"+String(m).padStart(2,"0"); }
+function appendToStream(s){
+  // insert before the trailing pending-decision flag so the flag stays the visual bookmark? No —
+  // chronology wins: new entries go strictly at the end.
+  stream.push(s);
+  const node = entryNode(s); s.node = node;
+  node.classList.add("new-entry");
+  $("#stream").appendChild(node);
+}
+function nearBottom(){ return window.innerHeight + window.scrollY > document.body.scrollHeight - 260; }
+function jumpToBottom(){ window.scrollTo({top:document.body.scrollHeight, behavior:"smooth"}); $("#newpill").style.display="none"; }
+
+/* ---------- workflow 2: agent report ---------- */
+function simulateReport(){
+  if(reportFired) return;
+  reportFired = true;
+  const r = WORLD.incomingReport;
+  WORLD.events.push(r);
+  const wasNear = nearBottom();
+  const s = { day:3, ts:r.ts, proj:r.proj, agent:r.agent, kind:r.kind, t:r.t, thread:true };
+  appendToStream(s);
+  if(replayOn){ replayItems.push(s); updateReplayChrome(); }
+  const a = projById("albion").agents.find(x=>x.id==="packet-tracer");
+  a.lastReport = r.ts;
+  renderScrub();
+  $("#simbtn").style.opacity=.45;
+  if(wasNear && !replayOn) jumpToBottom();
+  else if(!replayOn) $("#newpill").style.display="block";
+}
+setTimeout(()=>{ if(!reportFired) simulateReport(); }, 8000);
+
+/* ---------- workflow 3: replay + decide ---------- */
+function enterReplay(){
+  replayOn = true; replayIdx = 0;
+  replayItems = stream.filter(s=>s.thread);
+  document.body.classList.add("replay");
+  replayItems.forEach(s=>s.node.classList.add("replay-future"));
+  updateReplayChrome();
+  gotoReplay(0);
+}
+function gotoReplay(i){
+  replayIdx = Math.max(0, Math.min(replayItems.length-1, i));
+  replayItems.forEach((s,j)=>{
+    s.node.classList.toggle("replay-current", j===replayIdx);
+    s.node.classList.toggle("replay-past", j<replayIdx);
+    s.node.classList.toggle("replay-future", j>replayIdx);
+  });
+  const n = replayItems[replayIdx].node;
+  window.scrollTo({top: n.getBoundingClientRect().top + window.scrollY - window.innerHeight/2.6, behavior:"smooth"});
+  updateReplayChrome();
+}
+function replayStep(d){ gotoReplay(replayIdx+d); }
+function updateReplayChrome(){
+  $("#rb-step").textContent = (replayIdx+1) + " / " + replayItems.length;
+  $("#rb-prev").disabled = replayIdx===0;
+  $("#rb-next").disabled = replayIdx===replayItems.length-1;
+}
+function exitReplay(){
+  replayOn = false;
+  document.body.classList.remove("replay");
+  replayItems.forEach(s=>s.node.classList.remove("replay-current","replay-past","replay-future"));
+}
+function commitDecision(idx){
+  const d = decById("decision-gate-desync");
+  if(d.state!=="pending") return;
+  d.state = "resolved"; d.chosen = d.options[idx];
+  exitReplay();
+  // update the flag pin in place
+  const flag = stream.find(s=>s.kind==="flag" && s.decId===d.id);
+  const fresh = entryNode(flag);
+  flag.node.replaceWith(fresh); flag.node = fresh;
+  // resolution entry, inked at the end of today
+  appendToStream({ day:3, ts:nowTs(), proj:"albion", kind:"note",
+    t:"Decision committed — "+d.title.split(":")[0]+": chose "+d.chosen+". navigator unblocked.", thread:false });
+  const nav = projById("albion").agents.find(a=>a.id==="navigator");
+  nav.state = "working"; delete nav.blockedOn;
+  renderScrub();
+  jumpToBottom();
+}
+
+/* ---------- chrome ---------- */
+function togglePop(which){
+  ["workflows","compare"].forEach(k=>{
+    const el = document.getElementById("pop-"+k);
+    if(k===which) el.classList.toggle("open"); else el.classList.remove("open");
+  });
+}
+document.addEventListener("keydown", e=>{
+  if(e.target.tagName==="INPUT") return;
+  if(e.key==="c"||e.key==="C"){ e.preventDefault(); focusCapture(); }
+  if(replayOn && e.key==="ArrowRight"){ e.preventDefault(); replayStep(1); }
+  if(replayOn && e.key==="ArrowLeft"){ e.preventDefault(); replayStep(-1); }
+  if(e.key==="Escape"){ exitReplay(); togglePop(null); }
+});
+
+renderStream(); renderScrub();
+window.scrollTo(0, document.body.scrollHeight); // open on today, newest at bottom
+</script>
+</body>
+</html>

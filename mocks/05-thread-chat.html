@@ -1,0 +1,707 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Threads — thread-centric context chat</title>
+<style>
+  :root{
+    --bg:#12151b; --panel:#171b22; --panel2:#1d222c; --raise:#232936;
+    --border:#262d3a; --border2:#303948;
+    --text:#d9dfe9; --dim:#8b94a5; --faint:#5d6675;
+    --accent:#3fd6b8; --accent-dim:#2a8f7c; --amber:#e0a458; --red:#e2726e; --green:#7ad3a5;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:var(--bg); color:var(--text);
+    font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Ubuntu,sans-serif;
+    overflow:hidden;
+  }
+  button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+
+  /* ---------- top bar ---------- */
+  #topbar{
+    height:38px;display:flex;align-items:center;gap:14px;padding:0 14px;
+    background:var(--panel);border-bottom:1px solid var(--border);
+    position:relative;z-index:30;
+  }
+  #topbar .logo{font-weight:700;color:var(--accent);letter-spacing:.02em}
+  #topbar .rationale{color:var(--dim);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1}
+  .tbtn{
+    font-size:12.5px;color:var(--dim);padding:4px 10px;border-radius:6px;
+    border:1px solid var(--border2);transition:all .15s;white-space:nowrap;
+  }
+  .tbtn:hover{color:var(--text);border-color:var(--accent-dim);background:var(--panel2)}
+  .tbtn.primary{color:var(--accent);border-color:var(--accent-dim)}
+  .tbtn.primary:hover{background:rgba(63,214,184,.08)}
+
+  /* ---------- popovers (hints / compare) ---------- */
+  .pop{
+    position:fixed;top:44px;right:12px;width:340px;z-index:60;
+    background:var(--raise);border:1px solid var(--border2);border-radius:10px;
+    padding:14px 16px;box-shadow:0 12px 32px rgba(0,0,0,.5);
+    font-size:12.5px;color:var(--dim);display:none;
+  }
+  .pop.open{display:block;animation:pin .18s ease}
+  .pop h3{font-size:12px;color:var(--text);text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px}
+  .pop ol,.pop ul{padding-left:18px;display:grid;gap:6px}
+  .pop b{color:var(--text);font-weight:600}
+  .pop .sw{margin-top:10px}
+  .pop kbd{font-family:var(--mono);font-size:11px;background:var(--panel);border:1px solid var(--border2);border-radius:4px;padding:0 4px}
+  @keyframes pin{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+
+  /* ---------- layout ---------- */
+  #app{display:flex;height:calc(100% - 38px)}
+  #sidebar{
+    width:230px;min-width:230px;background:var(--panel);border-right:1px solid var(--border);
+    display:flex;flex-direction:column;
+  }
+  .ws-head{padding:14px 16px 10px;border-bottom:1px solid var(--border)}
+  .ws-head .t{font-weight:700;font-size:15px}
+  .ws-head .s{font-size:11.5px;color:var(--faint)}
+  .ch-section{font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--faint);padding:14px 16px 4px}
+  .chan{
+    display:flex;align-items:center;gap:7px;padding:5px 16px;cursor:pointer;
+    color:var(--dim);transition:background .12s;user-select:none;
+  }
+  .chan:hover{background:var(--panel2);color:var(--text)}
+  .chan.active{background:var(--panel2);color:var(--text);box-shadow:inset 2px 0 0 var(--accent)}
+  .chan .hash{font-weight:700;font-size:13px}
+  .chan .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .chan.unread .nm{color:var(--text);font-weight:600}
+  .badge{
+    min-width:18px;height:17px;padding:0 5px;border-radius:9px;background:var(--accent);
+    color:#0b201b;font-size:10.5px;font-weight:700;display:flex;align-items:center;justify-content:center;
+  }
+  .adots{display:flex;gap:3px}
+  .adot{width:6px;height:6px;border-radius:50%}
+  .adot.working{background:var(--green);animation:pulse 2.2s infinite}
+  .adot.blocked{background:var(--red)}
+  .adot.idle{background:var(--faint)}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  #sideFoot{margin-top:auto;padding:12px 16px;border-top:1px solid var(--border);display:grid;gap:8px}
+  #qcBtn{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:7px 10px;border-radius:8px;border:1px dashed var(--accent-dim);
+    color:var(--accent);font-size:12.5px;transition:all .15s;
+  }
+  #qcBtn:hover{background:rgba(63,214,184,.08);border-style:solid}
+  #sideFoot a{font-size:12px;color:var(--faint)}
+  #sideFoot a:hover{color:var(--accent)}
+  kbd.k{font-family:var(--mono);font-size:10.5px;background:var(--panel2);border:1px solid var(--border2);border-radius:4px;padding:1px 5px;color:var(--dim)}
+
+  /* ---------- main ---------- */
+  #main{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--bg)}
+  #chanHead{
+    padding:10px 20px;border-bottom:1px solid var(--border);background:var(--panel);
+    display:flex;align-items:baseline;gap:12px;
+  }
+  #chanTitle{font-weight:700;font-size:15px}
+  #chanGoal{font-size:12.5px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #pinBar{
+    display:none;align-items:center;gap:8px;padding:7px 20px;font-size:12.5px;
+    background:linear-gradient(90deg,rgba(224,164,88,.10),rgba(224,164,88,.03));
+    border-bottom:1px solid var(--border);color:var(--amber);cursor:pointer;transition:background .15s;
+  }
+  #pinBar:hover{background:linear-gradient(90deg,rgba(224,164,88,.18),rgba(224,164,88,.05))}
+  #pinBar.resolved{color:var(--green);cursor:default;
+    background:linear-gradient(90deg,rgba(122,211,165,.10),rgba(122,211,165,.02))}
+  #pinBar .due{margin-left:auto;font-size:11.5px;color:var(--dim)}
+
+  #msgScroll{flex:1;overflow-y:auto;scroll-behavior:smooth}
+  #msgList{padding:16px 0 26px;max-width:860px}
+  .divider{
+    display:flex;align-items:center;gap:12px;margin:16px 20px 8px;color:var(--faint);
+    font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+  }
+  .divider::before,.divider::after{content:"";flex:1;height:1px;background:var(--border)}
+
+  .msg{display:flex;gap:12px;padding:4px 20px;border-radius:0}
+  .msg:hover{background:rgba(255,255,255,.025)}
+  .msg .av{
+    width:34px;height:34px;border-radius:9px;flex:none;margin-top:2px;
+    display:flex;align-items:center;justify-content:center;
+    font-weight:700;font-size:12px;color:#10131a;
+  }
+  .msg .body{min-width:0;flex:1}
+  .msg .hd{display:flex;align-items:baseline;gap:8px;margin-bottom:1px}
+  .msg .who{font-weight:700;font-size:13.5px}
+  .msg .tag{font-size:10px;color:var(--faint);border:1px solid var(--border2);border-radius:4px;padding:0 4px;letter-spacing:.05em}
+  .msg .ts{font-size:11px;color:var(--faint)}
+  .msg .txt{color:var(--text);overflow-wrap:break-word}
+  .msg.cont{padding-top:1px;padding-bottom:1px}
+  .msg.cont .av{visibility:hidden;height:0;margin:0}
+  .msg.cont .hd{display:none}
+  .msg.cont .hts{
+    position:absolute;left:20px;width:34px;font-size:10px;color:var(--faint);
+    opacity:0;text-align:center;margin-top:3px;
+  }
+  .msg.cont{position:relative}
+  .msg.cont:hover .hts{opacity:1}
+  .msg.blocked .txt{color:var(--red)}
+  .msg.blocked{box-shadow:inset 2px 0 0 var(--red)}
+  .msg.capture .txt{
+    display:inline-block;background:var(--panel2);border:1px dashed var(--border2);
+    border-radius:8px;padding:5px 10px;color:var(--dim);font-size:13px;
+  }
+  .msg.ctx{opacity:.92}
+  .msg.ctx .body{border-left:2px solid var(--accent-dim);padding-left:10px}
+  .msg.ctx .tag.log{color:var(--accent);border-color:var(--accent-dim)}
+  .msg.reading{background:rgba(63,214,184,.09);transition:background .3s}
+  .msg.arrive{animation:arrive .5s ease}
+  @keyframes arrive{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+  /* decision card */
+  .dwrap{padding:6px 20px}
+  .dcard{
+    border:1px solid var(--amber);border-radius:12px;background:var(--panel2);
+    padding:14px 16px;max-width:620px;transition:box-shadow .3s;
+  }
+  .dcard.flash{box-shadow:0 0 0 3px rgba(224,164,88,.35)}
+  .dcard .dtag{font-size:10.5px;letter-spacing:.12em;color:var(--amber);text-transform:uppercase;font-weight:700}
+  .dcard .dtitle{font-weight:700;font-size:15px;margin:5px 0 8px}
+  .dcard .dopts{list-style:none;display:grid;gap:5px;margin-bottom:12px}
+  .dcard .dopts li{
+    font-size:12.5px;color:var(--dim);background:var(--panel);border:1px solid var(--border);
+    border-radius:8px;padding:6px 10px;
+  }
+  .dcard .dactions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .choose{
+    padding:6px 12px;border-radius:8px;font-size:12.5px;font-weight:600;
+    background:var(--accent);color:#0b201b;transition:filter .15s;
+  }
+  .choose:hover{filter:brightness(1.12)}
+  .choose.alt{background:var(--panel);color:var(--accent);border:1px solid var(--accent-dim)}
+  .choose.alt:hover{background:rgba(63,214,184,.08)}
+  .ghostbtn{font-size:12px;color:var(--dim);text-decoration:underline dotted;padding:4px 2px}
+  .ghostbtn:hover{color:var(--accent)}
+  .dcard.resolved{border-color:var(--green)}
+  .dcard.resolved .dtag{color:var(--green)}
+  .dres{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--green);font-weight:600}
+
+  /* composer */
+  #composer{padding:12px 20px 16px;max-width:860px}
+  #composer .box{
+    display:flex;gap:8px;background:var(--panel2);border:1px solid var(--border2);
+    border-radius:10px;padding:8px 10px;transition:border-color .15s;
+  }
+  #composer .box:focus-within{border-color:var(--accent-dim)}
+  #composer input{
+    flex:1;background:none;border:none;outline:none;color:var(--text);font:inherit;
+  }
+  #composer input::placeholder{color:var(--faint)}
+  #sendBtn{color:var(--accent);font-weight:700;font-size:13px;padding:0 6px}
+  #sendBtn:hover{filter:brightness(1.2)}
+
+  /* re-read indicator */
+  #reread{
+    position:fixed;bottom:86px;left:50%;transform:translateX(-50%);z-index:70;
+    background:var(--raise);border:1px solid var(--accent-dim);border-radius:999px;
+    padding:8px 16px;font-size:12.5px;color:var(--accent);display:none;align-items:center;gap:12px;
+    box-shadow:0 8px 24px rgba(0,0,0,.5);
+  }
+  #reread.on{display:flex;animation:pin .2s ease}
+  #reread .skip{color:var(--dim);font-size:12px}
+  #reread .skip:hover{color:var(--text)}
+
+  /* quick capture modal */
+  #qcOverlay{
+    position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:80;display:none;
+    align-items:flex-start;justify-content:center;padding-top:18vh;
+  }
+  #qcOverlay.on{display:flex}
+  #qcModal{
+    width:520px;max-width:90vw;background:var(--raise);border:1px solid var(--accent-dim);
+    border-radius:12px;padding:16px;box-shadow:0 20px 60px rgba(0,0,0,.6);animation:pin .18s ease;
+  }
+  #qcModal .lbl{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);margin-bottom:8px}
+  #qcModal input{
+    width:100%;background:var(--panel);border:1px solid var(--border2);border-radius:8px;
+    padding:10px 12px;color:var(--text);font:inherit;outline:none;
+  }
+  #qcModal input:focus{border-color:var(--accent-dim)}
+  #qcModal .hint{font-size:11.5px;color:var(--faint);margin-top:8px}
+
+  /* toasts */
+  #toasts{position:fixed;right:14px;bottom:14px;z-index:90;display:grid;gap:8px;justify-items:end}
+  .toast{
+    background:var(--raise);border:1px solid var(--border2);border-left:3px solid var(--accent);
+    border-radius:8px;padding:9px 14px;font-size:12.5px;color:var(--text);
+    box-shadow:0 8px 24px rgba(0,0,0,.45);animation:pin .2s ease;max-width:340px;
+  }
+  .toast .sub{color:var(--faint);font-size:11px}
+
+  ::-webkit-scrollbar{width:10px}
+  ::-webkit-scrollbar-thumb{background:var(--border2);border-radius:5px}
+  ::-webkit-scrollbar-track{background:transparent}
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <span class="logo">💬 Threads</span>
+  <span class="rationale">Thread-centric chat — every project is one long-running conversation; agents and you talk in the same channel, so the scrollback <i>is</i> the context.</span>
+  <button class="tbtn primary" id="simBtn" onclick="fireReport()">▶ simulate agent report</button>
+  <button class="tbtn" onclick="togglePop('hints')">Try the workflows ▾</button>
+  <button class="tbtn" onclick="togglePop('compare')">ⓘ compare</button>
+  <a href="index.html" style="font-size:12.5px">index</a>
+</div>
+
+<div class="pop" id="hints">
+  <h3>Try the workflows</h3>
+  <ol>
+    <li><b>Capture</b> — press <kbd>c</kbd> anywhere (or the ＋ Quick capture button, or just type in <b>#capture</b>). It lands in #capture, unsorted.</li>
+    <li><b>Agent report</b> — click <b>▶ simulate agent report</b> (also auto-fires ~8s after load). packet-tracer posts into <b>#albion</b>; you get an unread badge if you're elsewhere.</li>
+    <li><b>Orient for a decision</b> — open <b>#albion</b> and click the 📌 pinned decision bar (or “↺ re-read history” on the card). The channel scrolls back through the 7-entry decision log, then lands on the commit buttons.</li>
+  </ol>
+</div>
+
+<div class="pop" id="compare">
+  <h3>Strengths</h3>
+  <ul>
+    <li>Chronology is native — the scrollback literally is the project memory.</li>
+    <li>Agent reports read like teammates talking; zero ceremony to absorb them.</li>
+    <li>One place per project; capture is just “say it in #capture”.</li>
+  </ul>
+  <h3 class="sw">Weaknesses</h3>
+  <ul>
+    <li>Structure drowns in the stream — tasks and status must be pinned or they scroll away.</li>
+    <li>Re-orientation means literally re-reading; slow when the log is long.</li>
+    <li>Cross-project overview requires channel-hopping; no single glance.</li>
+  </ul>
+</div>
+
+<div id="app">
+  <aside id="sidebar">
+    <div class="ws-head">
+      <div class="t">my-context</div>
+      <div class="s">4 projects · 5 agents · Aug 22</div>
+    </div>
+    <div class="ch-section">Projects</div>
+    <nav id="projChans"></nav>
+    <div class="ch-section">Stream</div>
+    <nav id="streamChans"></nav>
+    <div id="sideFoot">
+      <button id="qcBtn" onclick="openQC()"><span>＋ Quick capture</span><kbd class="k">c</kbd></button>
+      <a href="index.html">← all paradigms</a>
+    </div>
+  </aside>
+
+  <main id="main">
+    <div id="chanHead">
+      <span id="chanTitle"></span>
+      <span id="chanGoal"></span>
+    </div>
+    <div id="pinBar" onclick="pinClick()"></div>
+    <div id="msgScroll"><div id="msgList"></div></div>
+    <div id="composer">
+      <div class="box">
+        <input id="composeInput" autocomplete="off" placeholder="">
+        <button id="sendBtn" onclick="sendComposer()">Send</button>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div id="reread">
+  <span id="rereadTxt">you are re-reading: 1 of 7</span>
+  <button class="skip" onclick="skipReplay()">skip ▸</button>
+</div>
+
+<div id="qcOverlay" onclick="if(event.target===this)closeQC()">
+  <div id="qcModal">
+    <div class="lbl">Quick capture → #capture</div>
+    <input id="qcInput" autocomplete="off" placeholder="Type a thought — no need to classify it…">
+    <div class="hint">Enter to capture · Esc to dismiss · it lands unsorted in #capture</div>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+<script>
+const WORLD = {
+  now: "2026-08-22T14:30:00",
+  projects: [
+    { id: "albion", name: "Albion Automation", color: "#e0a458",
+      status: "active", goal: "Fully autonomous gathering + market loop",
+      agents: [
+        { id: "packet-tracer", name: "packet-tracer", state: "working",
+          task: "Instrument gate transition packets", lastReport: "12:41" },
+        { id: "navigator", name: "navigator", state: "blocked",
+          task: "Cross-map routing through gates", lastReport: "11:58",
+          blockedOn: "decision-gate-desync" },
+        { id: "market-bot", name: "market-bot", state: "idle",
+          task: "Waiting on price feed refactor", lastReport: "09:12" }
+      ],
+      tasks: [
+        { t: "Fix gate desync", state: "blocked" },
+        { t: "Price feed refactor", state: "todo" },
+        { t: "Resource route optimizer", state: "done" }
+      ]},
+    { id: "homelab", name: "Homelab Migration", color: "#6fb3d2",
+      status: "active", goal: "Move all services from old NUC to Proxmox cluster",
+      agents: [
+        { id: "infra-agent", name: "infra-agent", state: "working",
+          task: "Migrating Postgres volumes to new ZFS pool", lastReport: "14:07" }
+      ],
+      tasks: [
+        { t: "Migrate Postgres volumes", state: "doing" },
+        { t: "Move reverse proxy + certs", state: "todo" },
+        { t: "Decommission old NUC", state: "todo" }
+      ]},
+    { id: "paper", name: "Anomaly Detection Paper", color: "#b58ee0",
+      status: "deadline", goal: "Submit to conference — deadline Sep 5",
+      agents: [],
+      tasks: [
+        { t: "Rerun eval on v2 dataset", state: "doing" },
+        { t: "Write related-work section", state: "todo" },
+        { t: "Address advisor comments", state: "blocked" }
+      ]},
+    { id: "apartment", name: "Apartment Hunt", color: "#7fc98a",
+      status: "background", goal: "Find 2br under budget before Nov",
+      agents: [],
+      tasks: [
+        { t: "Visit Riverside listing", state: "todo" },
+        { t: "Compare commute times", state: "todo" }
+      ]}
+  ],
+  captures: [
+    { t: "idea: agents should emit confidence with every status report", ts: "13:22" },
+    { t: "check if ZFS snapshot schedule survives migration", ts: "10:45" },
+    { t: "landlord mentioned garage option?? follow up", ts: "yesterday" }
+  ],
+  events: [
+    { ts: "09:12", proj: "albion", agent: "market-bot", kind: "status", t: "Paused: price feed schema changed upstream, refactor needed" },
+    { ts: "10:03", proj: "paper", kind: "note", t: "Advisor replied: eval section needs v2 dataset numbers" },
+    { ts: "10:45", proj: null, kind: "capture", t: "check if ZFS snapshot schedule survives migration" },
+    { ts: "11:20", proj: "albion", agent: "packet-tracer", kind: "status", t: "Gate-probe run #2: emitted 1 move, restarted client — server position UNCHANGED" },
+    { ts: "11:58", proj: "albion", agent: "navigator", kind: "blocked", t: "Blocked: cannot route through gates until desync strategy chosen" },
+    { ts: "12:41", proj: "albion", agent: "packet-tracer", kind: "status", t: "Gate-probe run #3: same result. Server never applied any move after gate transition" },
+    { ts: "13:22", proj: null, kind: "capture", t: "idea: agents should emit confidence with every status report" },
+    { ts: "14:07", proj: "homelab", agent: "infra-agent", kind: "status", t: "Postgres volume 2/5 migrated, ETA 40m for remainder" }
+  ],
+  decisions: [
+    { id: "decision-gate-desync", proj: "albion", state: "pending",
+      title: "Gate desync fix: restart-probe vs re-handshake",
+      options: ["Restart-probe: auto-restart client after each gate to resync",
+                "Re-handshake: reverse-engineer and replay the gate handshake packets"],
+      due: "today" },
+    { id: "decision-eval-scope", proj: "paper", state: "pending",
+      title: "Eval scope: rerun full grid or only v2 delta",
+      options: ["Full grid (2 days compute)", "v2 delta only (4h, weaker claim)"],
+      due: "Aug 25" }
+  ],
+  decisionContext: [
+    { ts: "Aug 19 16:10", t: "navigator first reported chars 'rubber-banding' to gate entrance after transitions" },
+    { ts: "Aug 19 18:34", t: "hypothesis 1: movement-lock flag not cleared — DISPROVEN (flag clears in packet trace)" },
+    { ts: "Aug 20 11:02", t: "hypothesis 2: reliable-seq collision after zone load — DISPROVEN (seqs contiguous)" },
+    { ts: "Aug 20 15:47", t: "key insight: all movement after gate is client-side prediction; server acks contain no position echo" },
+    { ts: "Aug 21 12:30", t: "restart experiment: emit 1 move, restart client, read authoritative resume position → server never moved the char" },
+    { ts: "Aug 21 12:55", t: "conclusion: server drops move stream after gate until a fresh handshake occurs. Two viable fixes identified" },
+    { ts: "Aug 22 12:41", t: "packet-tracer run #3 confirms: reproducible 3/3 times" }
+  ],
+  incomingReport: { ts: "14:31", proj: "albion", agent: "packet-tracer", kind: "status",
+    t: "Gate-probe run #4 complete: server pos unchanged after 3 moves — desync confirmed at handshake layer" }
+};
+
+/* ---------- people / channels ---------- */
+const PEOPLE = {
+  "packet-tracer": { init:"PT", color:"#e0a458", agent:true },
+  "navigator":     { init:"NV", color:"#e2726e", agent:true },
+  "market-bot":    { init:"MB", color:"#a3b86c", agent:true },
+  "infra-agent":   { init:"IA", color:"#6fb3d2", agent:true },
+  "you":           { init:"S",  color:"#3fd6b8" }
+};
+const CHANS = ["albion","homelab","paper","apartment","capture"];
+const meta = {};
+WORLD.projects.forEach(p => meta[p.id] = { name:p.id, color:p.color, goal:p.goal, agents:p.agents });
+meta.capture = { name:"capture", color:"#3fd6b8", goal:"unsorted quick captures — classify later, or never", agents:[] };
+const decisions = {};
+WORLD.decisions.forEach(d => decisions[d.id] = d);
+const E = WORLD.events;
+
+/* ---------- channel histories (from WORLD.events + interleaved human notes) ---------- */
+const msgs = {
+  albion: [
+    { who:"you", day:"Today", ts:"08:55", t:"Priority today: the gate desync. navigator is fully blocked until we pick a fix." },
+    { who:"market-bot", day:"Today", ts:E[0].ts, t:E[0].t },
+    { who:"packet-tracer", day:"Today", ts:E[3].ts, t:E[3].t },
+    { who:"navigator", day:"Today", ts:E[4].ts, t:E[4].t, kind:"blocked" },
+    { who:"you", day:"Today", ts:"12:05", t:"If run #3 matches run #2 we're down to the two candidate fixes — I'll decide today." },
+    { who:"packet-tracer", day:"Today", ts:E[5].ts, t:E[5].t, step:6 },
+    { kind:"decision", day:"Today", ts:"12:45", id:"decision-gate-desync" }
+  ],
+  homelab: [
+    { who:"you", day:"Today", ts:"13:30", t:"Kicked off the Postgres volume migration — keep an eye on ZFS pool IO while it runs." },
+    { who:"infra-agent", day:"Today", ts:"13:42", t:"Snapshots taken for all 5 volumes; starting transfer to the new ZFS pool." },
+    { who:"infra-agent", day:"Today", ts:E[7].ts, t:E[7].t }
+  ],
+  paper: [
+    { who:"you", day:"Today", ts:E[1].ts, t:E[1].t },
+    { who:"you", day:"Today", ts:"10:08", t:"That forces the eval-scope call: full grid rerun (2 days) vs v2 delta only (4h). Due Aug 25." },
+    { kind:"decision", day:"Today", ts:"10:09", id:"decision-eval-scope" }
+  ],
+  apartment: [
+    { who:"you", day:"Yesterday", ts:"18:20", t:"Riverside listing looks promising — trying to book a visit this weekend." },
+    { who:"you", day:"Yesterday", ts:"18:22", t:"Still need to compare commute times from both shortlisted areas before deciding anything." }
+  ],
+  capture: [
+    { who:"you", day:"Yesterday", ts:"—", t:WORLD.captures[2].t, kind:"capture" },
+    { who:"you", day:"Today", ts:WORLD.captures[1].ts, t:WORLD.captures[1].t, kind:"capture" },
+    { who:"you", day:"Today", ts:WORLD.captures[0].ts, t:WORLD.captures[0].t, kind:"capture" }
+  ]
+};
+
+/* ---------- state ---------- */
+let cur = "albion";
+const unread = { albion:0, homelab:0, paper:0, apartment:0, capture:0 };
+let ctxInjected = false, replayTimer = null, replayStep = -1, autoFired = false;
+let clockMins = 14*60 + 32;
+const $ = s => document.querySelector(s);
+const esc = s => s.replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function nowTs(){ const h = Math.floor(clockMins/60), m = clockMins%60; clockMins++; return h + ":" + String(m).padStart(2,"0"); }
+
+/* ---------- rendering ---------- */
+function renderSidebar(){
+  const proj = CHANS.filter(c => c !== "capture").map(chanRow).join("");
+  $("#projChans").innerHTML = proj;
+  $("#streamChans").innerHTML = chanRow("capture");
+}
+function chanRow(id){
+  const m = meta[id];
+  const dots = m.agents.map(a => `<span class="adot ${a.state}" title="${a.name}: ${a.state}"></span>`).join("");
+  const b = unread[id] ? `<span class="badge">${unread[id]}</span>` : "";
+  return `<div class="chan ${id===cur?"active":""} ${unread[id]?"unread":""}" onclick="switchChan('${id}')">
+    <span class="hash" style="color:${m.color}">#</span><span class="nm">${m.name}</span>${dots}${b}</div>`;
+}
+function renderHead(){
+  const m = meta[cur];
+  $("#chanTitle").innerHTML = `<span style="color:${m.color}">#</span> ${m.name}`;
+  $("#chanGoal").textContent = m.goal + (m.agents.length ? ` · ${m.agents.length} agent${m.agents.length>1?"s":""}` : "");
+  const pin = $("#pinBar");
+  const pend = WORLD.decisions.find(d => d.proj === cur);
+  if(!pend){ pin.style.display = "none"; return; }
+  pin.style.display = "flex";
+  if(pend.state === "pending"){
+    pin.className = "";
+    pin.innerHTML = `📌 <b>Decision pending:</b>&nbsp;${pend.title}
+      <span class="due">due ${pend.due} · click to re-read &amp; decide</span>`;
+  } else {
+    pin.className = "resolved";
+    pin.innerHTML = `✓ <b>Decided:</b>&nbsp;${pend.title} → ${shortOpt(pend.options[pend.chosen])}<span class="due">resolved ${pend.resolvedTs}</span>`;
+  }
+}
+function shortOpt(o){ return o.split(/[:(]/)[0].trim(); }
+
+function msgRow(m, contd){
+  if(m.kind === "decision") return decisionCard(decisions[m.id]);
+  const p = PEOPLE[m.who];
+  const cls = ["msg", contd?"cont":"", m.kind==="blocked"?"blocked":"", m.kind==="capture"?"capture":"", m.ctx?"ctx":"", m.arrive?"arrive":""].join(" ");
+  const step = m.step !== undefined ? ` data-step="${m.step}"` : "";
+  const tag = m.ctx ? `<span class="tag log">decision log</span>` : (p.agent ? `<span class="tag">agent</span>` : "");
+  return `<div class="${cls}"${step}>
+    ${contd?`<span class="hts">${m.ts}</span>`:""}
+    <div class="av" style="background:${p.color}">${p.init}</div>
+    <div class="body">
+      <div class="hd"><span class="who" style="color:${p.color}">${m.who}</span>${tag}<span class="ts">${m.ts}</span></div>
+      <div class="txt">${esc(m.t)}</div>
+    </div></div>`;
+}
+function decisionCard(d){
+  if(d.state === "resolved"){
+    return `<div class="dwrap"><div class="dcard resolved" data-decision="${d.id}">
+      <div class="dtag">⚖ Decision · resolved</div>
+      <div class="dtitle">${d.title}</div>
+      <div class="dres">✓ Chose ${shortOpt(d.options[d.chosen])} <span style="color:var(--faint);font-weight:400;font-size:11.5px">· ${d.resolvedTs}</span></div>
+    </div></div>`;
+  }
+  const opts = d.options.map(o => `<li>${o}</li>`).join("");
+  const reread = d.id === "decision-gate-desync"
+    ? `<button class="ghostbtn" onclick="orient()">↺ re-read history (7 entries)</button>` : "";
+  return `<div class="dwrap"><div class="dcard" data-decision="${d.id}">
+    <div class="dtag">⚖ Decision needed · due ${d.due}</div>
+    <div class="dtitle">${d.title}</div>
+    <ul class="dopts">${opts}</ul>
+    <div class="dactions">
+      <button class="choose" onclick="resolve('${d.id}',0)">Choose ${shortOpt(d.options[0])}</button>
+      <button class="choose alt" onclick="resolve('${d.id}',1)">Choose ${shortOpt(d.options[1])}</button>
+      ${reread}
+    </div></div></div>`;
+}
+
+function renderMsgs(keepScroll){
+  const list = $("#msgList");
+  const sc = $("#msgScroll");
+  let html = "", prevDay = null, prevWho = null, prevCtx = null;
+  for(const m of msgs[cur]){
+    if(m.day !== prevDay){ html += `<div class="divider">${m.day}</div>`; prevDay = m.day; prevWho = null; }
+    if(m.kind === "decision"){ html += msgRow(m); prevWho = null; continue; }
+    const contd = m.who === prevWho && !m.kind && prevCtx === !!m.ctx;
+    html += msgRow(m, contd);
+    prevWho = (m.kind === "blocked" || m.kind === "capture") ? null : m.who;
+    prevCtx = !!m.ctx;
+  }
+  list.innerHTML = html;
+  if(!keepScroll) sc.scrollTop = sc.scrollHeight;
+}
+function renderAll(keepScroll){ renderSidebar(); renderHead(); renderMsgs(keepScroll); }
+
+/* ---------- actions ---------- */
+function switchChan(id){
+  if(replayTimer) skipReplay(true);
+  cur = id; unread[id] = 0;
+  renderAll();
+  const inp = $("#composeInput");
+  inp.placeholder = id === "capture"
+    ? "Capture a thought — it lands here, unsorted…"
+    : "Message #" + id + "  (notes interleave with agent reports)";
+}
+function addMsg(chan, m, opts){
+  m.arrive = true;
+  msgs[chan].push(m);
+  if(chan === cur){
+    const sc = $("#msgScroll");
+    const nearBottom = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 140;
+    renderAll(!nearBottom);
+  } else {
+    unread[chan]++;
+    renderSidebar();
+  }
+  if(opts && opts.toast) toast(opts.toast, opts.sub);
+  delete m.arrive;
+}
+function sendComposer(){
+  const inp = $("#composeInput");
+  const t = inp.value.trim();
+  if(!t) return;
+  inp.value = "";
+  if(cur === "capture") addCapture(t);
+  else addMsg(cur, { who:"you", day:"Today", ts:nowTs(), t });
+}
+function addCapture(t){
+  addMsg("capture", { who:"you", day:"Today", ts:nowTs(), t, kind:"capture" },
+    cur !== "capture" ? { toast:"Captured → #capture", sub:"unsorted — classify later, or never" } : null);
+}
+
+/* workflow 1: quick capture */
+function openQC(){ $("#qcOverlay").classList.add("on"); $("#qcInput").focus(); }
+function closeQC(){ $("#qcOverlay").classList.remove("on"); $("#qcInput").value = ""; }
+
+/* workflow 2: simulated agent report */
+function fireReport(){
+  autoFired = true;
+  const r = WORLD.incomingReport;
+  addMsg(r.proj, { who:r.agent, day:"Today", ts:nowTs()>r.ts?nowTs():r.ts, t:r.t },
+    { toast:"packet-tracer · new report", sub:"in #albion — " + r.t.slice(0,60) + "…" });
+}
+
+/* workflow 3: orient for the gate-desync decision */
+function injectContext(){
+  if(ctxInjected) return;
+  ctxInjected = true;
+  const who = ["navigator","you","you","packet-tracer","you","you"];
+  const older = WORLD.decisionContext.slice(0,6).map((e,i) => {
+    const parts = e.ts.split(" ");
+    return { who:who[i], day:parts[0]+" "+parts[1], ts:parts[2], t:e.t, ctx:true, step:i };
+  });
+  msgs.albion = older.concat(msgs.albion);
+}
+function orient(){
+  if(cur !== "albion") switchChan("albion");
+  const first = !ctxInjected;
+  injectContext();
+  if(first) renderMsgs(true);
+  if(replayTimer) clearInterval(replayTimer);
+  replayStep = 0;
+  $("#reread").classList.add("on");
+  stepTo(0);
+  replayTimer = setInterval(() => {
+    replayStep++;
+    if(replayStep > 6) finishReplay(); else stepTo(replayStep);
+  }, 1600);
+}
+function stepTo(i){
+  document.querySelectorAll(".msg.reading").forEach(e => e.classList.remove("reading"));
+  const el = document.querySelector(`[data-step="${i}"]`);
+  if(el){ el.classList.add("reading"); el.scrollIntoView({ behavior:"smooth", block:"center" }); }
+  $("#rereadTxt").textContent = `you are re-reading: ${i+1} of 7`;
+}
+function finishReplay(){
+  clearInterval(replayTimer); replayTimer = null;
+  document.querySelectorAll(".msg.reading").forEach(e => e.classList.remove("reading"));
+  const card = document.querySelector('[data-decision="decision-gate-desync"]');
+  if(card){
+    card.scrollIntoView({ behavior:"smooth", block:"center" });
+    card.classList.add("flash");
+    setTimeout(() => card.classList.remove("flash"), 2600);
+  }
+  $("#rereadTxt").textContent = "caught up — decide below";
+  setTimeout(() => $("#reread").classList.remove("on"), 1800);
+}
+function skipReplay(silent){
+  if(replayTimer){ clearInterval(replayTimer); replayTimer = null; }
+  if(silent){ $("#reread").classList.remove("on"); return; }
+  finishReplay();
+}
+function resolve(id, idx){
+  const d = decisions[id];
+  d.state = "resolved"; d.chosen = idx; d.resolvedTs = nowTs();
+  const short = shortOpt(d.options[idx]);
+  addMsg(d.proj, { who:"you", day:"Today", ts:d.resolvedTs,
+    t:`Decision: chose ${short} — ${d.options[idx].includes(":") ? d.options[idx].split(":")[1].trim() : d.options[idx]}.` });
+  if(id === "decision-gate-desync"){
+    setTimeout(() => addMsg("albion", { who:"navigator", day:"Today", ts:nowTs(),
+      t:"Unblocked — resuming cross-map routing through gates with the " + short.toLowerCase() + " strategy." },
+      { toast:"navigator unblocked", sub:"resuming cross-map routing" }), 900);
+    const nav = meta.albion.agents.find(a => a.id === "navigator");
+    if(nav) nav.state = "working";
+  }
+  toast("Decision resolved: " + short, d.title);
+  renderAll(true);
+  const card = document.querySelector(`[data-decision="${id}"]`);
+  if(card) card.scrollIntoView({ behavior:"smooth", block:"center" });
+}
+
+/* ---------- chrome ---------- */
+function togglePop(id){
+  ["hints","compare"].forEach(p => {
+    const el = document.getElementById(p);
+    if(p === id) el.classList.toggle("open"); else el.classList.remove("open");
+  });
+}
+function toast(t, sub){
+  const el = document.createElement("div");
+  el.className = "toast";
+  el.innerHTML = `<div>${esc(t)}</div>` + (sub ? `<div class="sub">${esc(sub)}</div>` : "");
+  $("#toasts").appendChild(el);
+  setTimeout(() => { el.style.transition = "opacity .4s"; el.style.opacity = 0; setTimeout(() => el.remove(), 450); }, 3600);
+}
+
+/* ---------- wiring ---------- */
+$("#composeInput").addEventListener("keydown", e => { if(e.key === "Enter") sendComposer(); });
+$("#qcInput").addEventListener("keydown", e => {
+  if(e.key === "Enter"){ const t = e.target.value.trim(); if(t){ addCapture(t); } closeQC(); }
+  if(e.key === "Escape") closeQC();
+});
+document.addEventListener("keydown", e => {
+  const typing = /INPUT|TEXTAREA/.test(document.activeElement.tagName);
+  if(e.key === "Escape"){ closeQC(); ["hints","compare"].forEach(p => document.getElementById(p).classList.remove("open")); return; }
+  if(typing) return;
+  if(e.key === "c"){ e.preventDefault(); openQC(); }
+});
+function pinClick(){
+  const d = WORLD.decisions.find(x => x.proj === cur);
+  if(!d || d.state !== "pending") return;
+  if(d.id === "decision-gate-desync") orient();
+  else { const c = document.querySelector(`[data-decision="${d.id}"]`); if(c){ c.scrollIntoView({behavior:"smooth",block:"center"}); c.classList.add("flash"); setTimeout(()=>c.classList.remove("flash"),2000); } }
+}
+
+switchChan("albion");
+setTimeout(() => { if(!autoFired) fireReport(); }, 8000);
+</script>
+</body>
+</html>

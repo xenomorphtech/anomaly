@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Knowledge Graph — context mesh</title>
+<style>
+  :root{
+    --bg:#0a0c10; --bg2:#0e1117; --panel:#12161f; --line:#1c2230;
+    --ink:#c9d2e0; --ink-dim:#8892a4; --ink-faint:#5a6375;
+    --accent:#8be0c9; --amber:#ffd166; --red:#ff5c5c; --green:#7fc98a;
+    --mono:ui-monospace,'SF Mono','Cascadia Code',Menlo,Consolas,monospace;
+    --sans:ui-sans-serif,system-ui,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;overflow:hidden}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px}
+
+  /* ── top bar ─────────────────────────── */
+  #topbar{position:fixed;inset:0 0 auto 0;height:46px;z-index:40;display:flex;align-items:center;gap:14px;
+    padding:0 14px;background:rgba(10,12,16,.82);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+  #topbar .logo{font-family:var(--mono);font-size:13px;color:var(--accent);letter-spacing:.14em;text-transform:uppercase;white-space:nowrap}
+  #topbar .tagline{color:var(--ink-faint);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  #topbar .spacer{flex:1}
+  .tbtn{background:var(--panel);border:1px solid var(--line);color:var(--ink);font:12px var(--sans);
+    padding:5px 11px;border-radius:6px;cursor:pointer;white-space:nowrap;transition:border-color .15s,color .15s}
+  .tbtn:hover{border-color:var(--accent);color:var(--accent)}
+  .tbtn.accent{color:var(--accent);border-color:#2a4a41}
+  #topbar a{color:var(--ink-dim);font-size:12px;text-decoration:none;white-space:nowrap}
+  #topbar a:hover{color:var(--accent)}
+
+  /* ── hint panel ──────────────────────── */
+  #hints{position:fixed;top:54px;left:14px;z-index:39;width:296px;background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;padding:12px 14px;font-size:12px;line-height:1.5;color:var(--ink-dim);
+    box-shadow:0 12px 32px rgba(0,0,0,.5);display:none}
+  #hints.open{display:block}
+  #hints h3{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--accent);margin-bottom:8px}
+  #hints ol{padding-left:18px;display:grid;gap:7px}
+  #hints b{color:var(--ink)}
+  #hints kbd{font-family:var(--mono);font-size:10px;background:#1a2030;border:1px solid #2a3345;border-radius:4px;padding:1px 5px}
+
+  /* ── compare popover ─────────────────── */
+  #comparewrap{position:fixed;left:14px;bottom:14px;z-index:39}
+  #compare{position:absolute;bottom:34px;left:0;width:300px;background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;padding:12px 14px;font-size:12px;line-height:1.5;box-shadow:0 12px 32px rgba(0,0,0,.5);display:none}
+  #compare.open{display:block}
+  #compare h4{font-size:10px;letter-spacing:.12em;text-transform:uppercase;margin:6px 0 4px}
+  #compare h4.s{color:var(--green)} #compare h4.w{color:var(--red)}
+  #compare ul{padding-left:16px;color:var(--ink-dim)}
+  #compare li{margin:3px 0}
+
+  /* ── legend ──────────────────────────── */
+  #legend{position:fixed;left:14px;bottom:52px;z-index:38;display:grid;gap:5px;font-size:10px;
+    letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);pointer-events:none}
+  #legend div{display:flex;align-items:center;gap:7px}
+  .lg{width:9px;height:9px;border-radius:50%;flex:none}
+
+  /* ── side panel ──────────────────────── */
+  #panel{position:fixed;top:46px;right:0;bottom:0;width:340px;z-index:35;background:var(--bg2);
+    border-left:1px solid var(--line);transform:translateX(105%);transition:transform .25s cubic-bezier(.2,.8,.2,1);
+    display:flex;flex-direction:column}
+  #panel.open{transform:none}
+  #panel header{padding:14px 16px 10px;border-bottom:1px solid var(--line);display:flex;align-items:flex-start;gap:8px}
+  #panel header .kind{font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:3px}
+  #panel header h2{font-size:15px;font-weight:600;line-height:1.3;flex:1}
+  #pclose{background:none;border:0;color:var(--ink-faint);font-size:16px;cursor:pointer;padding:2px 6px}
+  #pclose:hover{color:var(--ink)}
+  #pbody{flex:1;overflow-y:auto;padding:14px 16px;font-size:12.5px;line-height:1.55}
+  #pbody::-webkit-scrollbar{width:8px} #pbody::-webkit-scrollbar-thumb{background:#232a3a;border-radius:4px}
+  .chip{display:inline-block;font-size:10px;letter-spacing:.08em;text-transform:uppercase;border-radius:20px;
+    padding:2px 9px;border:1px solid var(--line);color:var(--ink-dim);margin:0 6px 6px 0}
+  .chip.working{color:var(--accent);border-color:#24443c}
+  .chip.blocked{color:var(--red);border-color:#4a2626}
+  .chip.idle{color:var(--ink-faint)}
+  .chip.pending{color:var(--amber);border-color:#4a4126}
+  .chip.resolved{color:var(--green);border-color:#274a30}
+  .sect{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-faint);margin:16px 0 7px}
+  .row{display:flex;gap:8px;padding:6px 0;border-bottom:1px solid #161b26;color:var(--ink-dim)}
+  .row:last-child{border-bottom:0}
+  .row .dot{width:7px;height:7px;border-radius:50%;margin-top:5px;flex:none}
+  .row b{color:var(--ink);font-weight:500}
+  .row .ts{font-family:var(--mono);font-size:10px;color:var(--ink-faint);white-space:nowrap;margin-top:2px}
+  .timeline{position:relative;padding-left:18px}
+  .timeline:before{content:'';position:absolute;left:5px;top:6px;bottom:6px;width:1px;background:#26304a}
+  .tl{position:relative;padding:5px 0 9px}
+  .tl:before{content:'';position:absolute;left:-17px;top:9px;width:7px;height:7px;border-radius:50%;
+    background:var(--bg2);border:1.5px solid var(--amber)}
+  .tl .ts{font-family:var(--mono);font-size:10px;color:var(--amber);opacity:.8}
+  .tl p{color:var(--ink-dim);margin-top:2px}
+  .tl b{color:var(--ink);font-weight:500}
+  .commitbox{margin-top:16px;border:1px solid #3a3524;border-radius:10px;padding:12px;background:#161408}
+  .commitbox .q{font-size:12px;color:var(--amber);margin-bottom:10px}
+  .cbtn{display:block;width:100%;text-align:left;margin:6px 0;padding:9px 12px;border-radius:8px;cursor:pointer;
+    background:#1a2030;border:1px solid #2a3345;color:var(--ink);font:12.5px var(--sans);line-height:1.4;transition:all .15s}
+  .cbtn:hover{border-color:var(--accent);background:#1d2a30}
+  .cbtn b{color:var(--accent)}
+  .resolvedbox{margin-top:16px;border:1px solid #274a30;border-radius:10px;padding:12px;background:#0d1810;color:var(--green);font-size:12.5px}
+  .subtle{color:var(--ink-faint);font-size:11px;font-style:italic}
+
+  /* ── graph ───────────────────────────── */
+  #graph{position:absolute;inset:46px 0 0 0;cursor:grab;touch-action:none}
+  #graph.panning{cursor:grabbing}
+  svg{width:100%;height:100%;display:block}
+  .edge{stroke-width:1;fill:none;opacity:.45;filter:drop-shadow(0 0 3px rgba(139,224,201,.25))}
+  .edge.goal-e{stroke-dasharray:2 4;opacity:.35}
+  .edge.blocked-e{stroke:var(--red);stroke-dasharray:5 4;opacity:.55;animation:dashmove 1.4s linear infinite}
+  .edge.blocked-e.cleared{display:none}
+  @keyframes dashmove{to{stroke-dashoffset:-9}}
+  .node{cursor:pointer}
+  .node text{font-family:var(--sans);font-size:9.5px;letter-spacing:.13em;text-transform:uppercase;
+    fill:var(--ink-dim);text-anchor:middle;pointer-events:none}
+  .node text.sub{font-size:8px;fill:var(--ink-faint);letter-spacing:.08em}
+  .node:hover text{fill:var(--ink)}
+  .node .halo{transform-box:fill-box;transform-origin:center;opacity:0;pointer-events:none}
+  .node.working .halo{animation:pulse 3s ease-in-out infinite}
+  @keyframes pulse{0%,100%{transform:scale(1);opacity:.4}50%{transform:scale(1.9);opacity:0}}
+  .node.blocked .ring{stroke:var(--red);stroke-width:1.5;fill:none;animation:ringpulse 1.7s ease-in-out infinite}
+  @keyframes ringpulse{0%,100%{opacity:.9}50%{opacity:.3}}
+  .node.idle{opacity:.45}
+  .node.flash .halo{animation:flashping 1.1s ease-out 4}
+  @keyframes flashping{0%{transform:scale(1);opacity:.9}100%{transform:scale(2.6);opacity:0}}
+  .node.decision .shape{filter:drop-shadow(0 0 6px rgba(255,209,102,.7));animation:decglow 2.4s ease-in-out infinite}
+  @keyframes decglow{0%,100%{filter:drop-shadow(0 0 4px rgba(255,209,102,.5))}50%{filter:drop-shadow(0 0 10px rgba(255,209,102,.9))}}
+  .node.decision.resolved .shape{animation:none;filter:drop-shadow(0 0 4px rgba(127,201,138,.6))}
+  .node.capture .shape{stroke-dasharray:3 3}
+  #world.dimmed .node:not(.spot),#world.dimmed .edge:not(.spot){opacity:.08;transition:opacity .3s}
+  #world .node,#world .edge{transition:opacity .3s}
+  .sat text{font-size:8.5px;letter-spacing:.06em;text-transform:none}
+  .sat .num{font-family:var(--mono);font-size:9px;fill:#0a0c10;text-anchor:middle;font-weight:700}
+  .fan-enter{animation:satpop .35s cubic-bezier(.2,.8,.3,1.3) backwards}
+  @keyframes satpop{from{opacity:0}to{opacity:1}}
+
+  /* ── capture bar ─────────────────────── */
+  #capbar{position:fixed;left:50%;bottom:24px;transform:translate(-50%,80px);z-index:41;width:min(480px,90vw);
+    display:flex;gap:8px;background:var(--panel);border:1px solid #2a4a41;border-radius:12px;padding:10px;
+    box-shadow:0 16px 48px rgba(0,0,0,.6);transition:transform .22s cubic-bezier(.2,.8,.2,1);opacity:0}
+  #capbar.open{transform:translate(-50%,0);opacity:1}
+  #capinput{flex:1;background:#0c0f15;border:1px solid var(--line);border-radius:8px;color:var(--ink);
+    font:13px var(--sans);padding:8px 12px;outline:none}
+  #capinput:focus{border-color:var(--accent)}
+  #capbar button{background:#183028;border:1px solid #2a4a41;color:var(--accent);border-radius:8px;
+    padding:0 16px;font:12px var(--sans);cursor:pointer}
+  #capbar button:hover{background:#1d3a30}
+
+  /* ── toasts ──────────────────────────── */
+  #toasts{position:fixed;right:16px;bottom:16px;z-index:50;display:flex;flex-direction:column;gap:8px;align-items:flex-end}
+  .toast{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;
+    padding:9px 14px;font-size:12px;color:var(--ink);max-width:340px;box-shadow:0 8px 24px rgba(0,0,0,.5);
+    animation:toastin .25s cubic-bezier(.2,.8,.2,1)}
+  .toast .tt{font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:2px}
+  .toast.fade{opacity:0;transform:translateX(20px);transition:all .4s}
+  @keyframes toastin{from{opacity:0;transform:translateX(24px)}to{opacity:1;transform:none}}
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <span class="logo">◈ Knowledge Graph</span>
+  <span class="tagline">Everything is a node — context lives in the connections, and blocked work literally points at the decision blocking it.</span>
+  <span class="spacer"></span>
+  <button class="tbtn" id="hintbtn">Try the workflows ▾</button>
+  <button class="tbtn accent" id="reportbtn">▶ simulate agent report</button>
+  <button class="tbtn accent" id="capbtn">＋ capture <span style="opacity:.6;font-family:var(--mono)">c</span></button>
+  <a href="index.html">← all paradigms</a>
+</div>
+
+<div id="hints">
+  <h3>Try the workflows</h3>
+  <ol>
+    <li><b>Capture</b> — press <kbd>c</kbd> or hit <b>＋ capture</b>. Your thought drops in as an untethered node orbiting the center. No filing required.</li>
+    <li><b>Agent report</b> — click <b>▶ simulate agent report</b> (or wait ~8s). Watch the <b>packet-tracer</b> node ping in the Albion cluster.</li>
+    <li><b>Orient &amp; decide</b> — click the glowing amber ◆ <b>Gate desync fix</b> diamond (Albion cluster, upper-left). Its history fans out clockwise; read the sequence in the side panel, then commit.</li>
+  </ol>
+</div>
+
+<div id="legend">
+  <div><span class="lg" style="background:#e0a458"></span>project / goal</div>
+  <div><span class="lg" style="background:var(--accent)"></span>agent (pulse = working)</div>
+  <div><span class="lg" style="background:#7688a8"></span>task</div>
+  <div><span class="lg" style="background:var(--amber)"></span>◆ decision pending</div>
+  <div><span class="lg" style="border:1px dashed var(--accent);background:none"></span>unsorted capture</div>
+</div>
+
+<div id="comparewrap">
+  <button class="tbtn" id="comparebtn">ⓘ compare</button>
+  <div id="compare">
+    <h4 class="s">Strengths</h4>
+    <ul>
+      <li>Relationships are first-class: you can <i>see</i> navigator chained to the decision blocking it.</li>
+      <li>Spatial memory — clusters stay put, so you re-orient by location, not by search.</li>
+      <li>Ambient status: pulse/ring animations show the whole fleet's state at a glance.</li>
+    </ul>
+    <h4 class="w">Weaknesses</h4>
+    <ul>
+      <li>Poor for dense text — long reports still need a side panel to be readable.</li>
+      <li>Doesn't scale past ~100 nodes without clustering/filtering.</li>
+      <li>Captures still accumulate as orbiters; the graph doesn't triage them for you.</li>
+    </ul>
+  </div>
+</div>
+
+<div id="graph"><svg id="svg"><g id="world"></g></svg></div>
+
+<aside id="panel">
+  <header>
+    <div style="flex:1"><div class="kind" id="pkind"></div><h2 id="ptitle"></h2></div>
+    <button id="pclose" title="close">✕</button>
+  </header>
+  <div id="pbody"></div>
+</aside>
+
+<div id="capbar">
+  <input id="capinput" placeholder="Capture a thought — Enter drops it into the graph, unclassified" maxlength="140">
+  <button id="capsubmit">Capture</button>
+</div>
+
+<div id="toasts"></div>
+
+<script>
+'use strict';
+const WORLD = {
+  now: "2026-08-22T14:30:00",
+  projects: [
+    { id: "albion", name: "Albion Automation", color: "#e0a458",
+      status: "active", goal: "Fully autonomous gathering + market loop",
+      agents: [
+        { id: "packet-tracer", name: "packet-tracer", state: "working",
+          task: "Instrument gate transition packets", lastReport: "12:41" },
+        { id: "navigator", name: "navigator", state: "blocked",
+          task: "Cross-map routing through gates", lastReport: "11:58",
+          blockedOn: "decision-gate-desync" },
+        { id: "market-bot", name: "market-bot", state: "idle",
+          task: "Waiting on price feed refactor", lastReport: "09:12" }
+      ],
+      tasks: [
+        { t: "Fix gate desync", state: "blocked" },
+        { t: "Price feed refactor", state: "todo" },
+        { t: "Resource route optimizer", state: "done" }
+      ]},
+    { id: "homelab", name: "Homelab Migration", color: "#6fb3d2",
+      status: "active", goal: "Move all services from old NUC to Proxmox cluster",
+      agents: [
+        { id: "infra-agent", name: "infra-agent", state: "working",
+          task: "Migrating Postgres volumes to new ZFS pool", lastReport: "14:07" }
+      ],
+      tasks: [
+        { t: "Migrate Postgres volumes", state: "doing" },
+        { t: "Move reverse proxy + certs", state: "todo" },
+        { t: "Decommission old NUC", state: "todo" }
+      ]},
+    { id: "paper", name: "Anomaly Detection Paper", color: "#b58ee0",
+      status: "deadline", goal: "Submit to conference — deadline Sep 5",
+      agents: [],
+      tasks: [
+        { t: "Rerun eval on v2 dataset", state: "doing" },
+        { t: "Write related-work section", state: "todo" },
+        { t: "Address advisor comments", state: "blocked" }
+      ]},
+    { id: "apartment", name: "Apartment Hunt", color: "#7fc98a",
+      status: "background", goal: "Find 2br under budget before Nov",
+      agents: [],
+      tasks: [
+        { t: "Visit Riverside listing", state: "todo" },
+        { t: "Compare commute times", state: "todo" }
+      ]}
+  ],
+  captures: [
+    { t: "idea: agents should emit confidence with every status report", ts: "13:22" },
+    { t: "check if ZFS snapshot schedule survives migration", ts: "10:45" },
+    { t: "landlord mentioned garage option?? follow up", ts: "yesterday" }
+  ],
+  events: [
+    { ts: "09:12", proj: "albion", agent: "market-bot", kind: "status", t: "Paused: price feed schema changed upstream, refactor needed" },
+    { ts: "10:03", proj: "paper", kind: "note", t: "Advisor replied: eval section needs v2 dataset numbers" },
+    { ts: "10:45", proj: null, kind: "capture", t: "check if ZFS snapshot schedule survives migration" },
+    { ts: "11:20", proj: "albion", agent: "packet-tracer", kind: "status", t: "Gate-probe run #2: emitted 1 move, restarted client — server position UNCHANGED" },
+    { ts: "11:58", proj: "albion", agent: "navigator", kind: "blocked", t: "Blocked: cannot route through gates until desync strategy chosen" },
+    { ts: "12:41", proj: "albion", agent: "packet-tracer", kind: "status", t: "Gate-probe run #3: same result. Server never applied any move after gate transition" },
+    { ts: "13:22", proj: null, kind: "capture", t: "idea: agents should emit confidence with every status report" },
+    { ts: "14:07", proj: "homelab", agent: "infra-agent", kind: "status", t: "Postgres volume 2/5 migrated, ETA 40m for remainder" }
+  ],
+  decisions: [
+    { id: "decision-gate-desync", proj: "albion", state: "pending",
+      title: "Gate desync fix: restart-probe vs re-handshake",
+      options: ["Restart-probe: auto-restart client after each gate to resync",
+                "Re-handshake: reverse-engineer and replay the gate handshake packets"],
+      due: "today" },
+    { id: "decision-eval-scope", proj: "paper", state: "pending",
+      title: "Eval scope: rerun full grid or only v2 delta",
+      options: ["Full grid (2 days compute)", "v2 delta only (4h, weaker claim)"],
+      due: "Aug 25" }
+  ],
+  decisionContext: [
+    { ts: "Aug 19 16:10", t: "navigator first reported chars 'rubber-banding' to gate entrance after transitions" },
+    { ts: "Aug 19 18:34", t: "hypothesis 1: movement-lock flag not cleared — DISPROVEN (flag clears in packet trace)" },
+    { ts: "Aug 20 11:02", t: "hypothesis 2: reliable-seq collision after zone load — DISPROVEN (seqs contiguous)" },
+    { ts: "Aug 20 15:47", t: "key insight: all movement after gate is client-side prediction; server acks contain no position echo" },
+    { ts: "Aug 21 12:30", t: "restart experiment: emit 1 move, restart client, read authoritative resume position → server never moved the char" },
+    { ts: "Aug 21 12:55", t: "conclusion: server drops move stream after gate until a fresh handshake occurs. Two viable fixes identified" },
+    { ts: "Aug 22 12:41", t: "packet-tracer run #3 confirms: reproducible 3/3 times" }
+  ],
+  incomingReport: { ts: "14:31", proj: "albion", agent: "packet-tracer", kind: "status",
+    t: "Gate-probe run #4 complete: server pos unchanged after 3 moves — desync confirmed at handshake layer" }
+};
+
+/* ───────── layout ───────── */
+const NS='http://www.w3.org/2000/svg';
+const CX=800, CY=520;
+const nodes=new Map(), edges=[];
+const jit=i=>Math.sin(i*127.13+3.7)*14;
+const rad=d=>d*Math.PI/180;
+
+function addNode(n){ nodes.set(n.id,n); return n; }
+function addEdge(a,b,cls,color){ edges.push({a,b,cls,color}); }
+
+const projAngle={albion:-141, homelab:-39, paper:141, apartment:39};
+const projDist ={albion:415, homelab:385, paper:400, apartment:365};
+const stateDot=s=>({working:'var(--accent)',blocked:'var(--red)',idle:'#5a6375',doing:'var(--accent)',todo:'#7688a8',done:'var(--green)',pending:'var(--amber)'}[s]||'#7688a8');
+
+WORLD.projects.forEach((p,pi)=>{
+  const th=rad(projAngle[p.id]), d=projDist[p.id];
+  const px=CX+Math.cos(th)*d, py=CY+Math.sin(th)*d;
+  addNode({id:p.id,type:'project',label:p.name,x:px,y:py,r:24,color:p.color,data:p});
+  // goal node just beyond the project, outward
+  const gx=px+Math.cos(th)*105, gy=py+Math.sin(th)*105;
+  addNode({id:'goal-'+p.id,type:'goal',label:'goal',sub:p.goal.slice(0,34)+(p.goal.length>34?'…':''),x:gx,y:gy,r:11,color:p.color,data:p});
+  addEdge(p.id,'goal-'+p.id,'goal-e',p.color);
+  // children: decisions first, then agents, then tasks, fanned on the outward hemisphere
+  const kids=[];
+  WORLD.decisions.filter(dd=>dd.proj===p.id).forEach(dd=>kids.push({kind:'decision',o:dd}));
+  p.agents.forEach(a=>kids.push({kind:'agent',o:a}));
+  p.tasks.forEach((t,ti)=>kids.push({kind:'task',o:t,idx:ti}));
+  const spread=155, base=projAngle[p.id]-spread/2, step=kids.length>1?spread/(kids.length-1):0;
+  kids.forEach((k,i)=>{
+    const a=rad(base+step*i)+ (i%2? .06:-.06);
+    const dist=128+(i%2)*34+jit(pi*10+i)*0.6;
+    const x=px+Math.cos(a)*dist, y=py+Math.sin(a)*dist;
+    if(k.kind==='agent'){
+      addNode({id:k.o.id,type:'agent',label:k.o.name,x,y,r:12,color:p.color,data:k.o,proj:p});
+      addEdge(p.id,k.o.id,'',p.color);
+    }else if(k.kind==='task'){
+      const id='task-'+p.id+'-'+k.idx;
+      addNode({id,type:'task',label:k.o.t.length>22?k.o.t.slice(0,21)+'…':k.o.t,x,y,r:8,color:'#7688a8',data:k.o,proj:p});
+      addEdge(p.id,id,'','#54627e');
+    }else{
+      addNode({id:k.o.id,type:'decision',label:k.o.title.split(':')[0],x,y,r:15,color:'#ffd166',data:k.o,proj:p});
+      addEdge(p.id,k.o.id,'','#8a7433');
+    }
+  });
+});
+addEdge('navigator','decision-gate-desync','blocked-e','#ff5c5c');
+
+let capN=0;
+function addCaptureNode(c){
+  const i=capN++;
+  const ang=rad(-90+i*97+jit(i)*2), r0=95+ (i%3)*38;
+  const n=addNode({id:'cap-'+i,type:'capture',label:c.t.length>26?c.t.slice(0,25)+'…':c.t,
+    x:CX+Math.cos(ang)*r0,y:CY+Math.sin(ang)*r0,r:9,color:'#8be0c9',data:c,
+    orbit:{cx:CX,cy:CY,r:r0,a:ang,speed:(i%2?1:-1)*(0.00006+ (i%3)*0.00002)}});
+  return n;
+}
+WORLD.captures.forEach(addCaptureNode);
+
+/* ───────── render ───────── */
+const world=document.getElementById('world');
+const gEdges=document.createElementNS(NS,'g');
+const gNodes=document.createElementNS(NS,'g');
+const gFan=document.createElementNS(NS,'g');
+world.appendChild(gEdges); world.appendChild(gFan); world.appendChild(gNodes);
+const edgeEls=[], nodeEls=new Map();
+
+function drawEdge(e){
+  const a=nodes.get(e.a), b=nodes.get(e.b);
+  const l=document.createElementNS(NS,'line');
+  l.setAttribute('class','edge '+(e.cls||''));
+  l.setAttribute('x1',a.x); l.setAttribute('y1',a.y);
+  l.setAttribute('x2',b.x); l.setAttribute('y2',b.y);
+  if(e.cls!=='blocked-e') l.setAttribute('stroke',e.color||'#3a4560');
+  gEdges.appendChild(l); edgeEls.push({el:l,e});
+  return l;
+}
+function shapeFor(n,g){
+  if(n.type==='decision'){
+    const p=document.createElementNS(NS,'path');
+    const r=n.r;
+    p.setAttribute('d',`M 0 ${-r} L ${r} 0 L 0 ${r} L ${-r} 0 Z`);
+    p.setAttribute('class','shape'); p.setAttribute('fill','#2a2410');
+    p.setAttribute('stroke',n.color); p.setAttribute('stroke-width','1.5');
+    g.appendChild(p); return;
+  }
+  const halo=document.createElementNS(NS,'circle');
+  halo.setAttribute('class','halo'); halo.setAttribute('r',n.r+4);
+  halo.setAttribute('fill','none'); halo.setAttribute('stroke',n.color); halo.setAttribute('stroke-width','2');
+  g.appendChild(halo);
+  const c=document.createElementNS(NS,'circle');
+  c.setAttribute('class','shape'); c.setAttribute('r',n.r);
+  if(n.type==='project'){ c.setAttribute('fill',n.color); c.setAttribute('fill-opacity','.16');
+    c.setAttribute('stroke',n.color); c.setAttribute('stroke-width','1.6'); }
+  else if(n.type==='goal'||n.type==='capture'){ c.setAttribute('fill','none');
+    c.setAttribute('stroke',n.color); c.setAttribute('stroke-width','1.2'); }
+  else { c.setAttribute('fill',n.type==='agent'?'#152028':'#161b26');
+    c.setAttribute('stroke',n.color); c.setAttribute('stroke-width','1.3'); }
+  g.appendChild(c);
+  if(n.type==='agent'){
+    const ring=document.createElementNS(NS,'circle');
+    ring.setAttribute('class','ring'); ring.setAttribute('r',n.r+5); ring.setAttribute('fill','none');
+    g.appendChild(ring);
+  }
+}
+function drawNode(n){
+  const g=document.createElementNS(NS,'g');
+  g.setAttribute('class','node '+n.type+(n.data&&n.data.state?' '+n.data.state:''));
+  g.dataset.id=n.id;
+  g.setAttribute('transform',`translate(${n.x},${n.y})`);
+  shapeFor(n,g);
+  const t=document.createElementNS(NS,'text');
+  t.setAttribute('y',n.r+15); t.textContent=n.label;
+  g.appendChild(t);
+  if(n.sub){ const s=document.createElementNS(NS,'text');
+    s.setAttribute('class','sub'); s.setAttribute('y',n.r+27); s.textContent=n.sub; g.appendChild(s); }
+  gNodes.appendChild(g); nodeEls.set(n.id,g);
+  return g;
+}
+edges.forEach(drawEdge);
+nodes.forEach(drawNode);
+
+/* ───────── pan / zoom ───────── */
+const svg=document.getElementById('svg'), graphEl=document.getElementById('graph');
+const view={x:0,y:0,k:1};
+function applyView(){ world.setAttribute('transform',`translate(${view.x},${view.y}) scale(${view.k})`); }
+function fitView(){
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  nodes.forEach(n=>{x0=Math.min(x0,n.x-80);y0=Math.min(y0,n.y-60);x1=Math.max(x1,n.x+80);y1=Math.max(y1,n.y+70);});
+  const w=graphEl.clientWidth,h=graphEl.clientHeight;
+  view.k=Math.min(w/(x1-x0),h/(y1-y0))*0.98;
+  view.x=(w-(x0+x1)*view.k)/2; view.y=(h-(y0+y1)*view.k)/2;
+  applyView();
+}
+let down=null;
+svg.addEventListener('pointerdown',e=>{
+  down={sx:e.clientX,sy:e.clientY,vx:view.x,vy:view.y,moved:false,
+        target:e.target.closest?e.target.closest('.node'):null};
+  svg.setPointerCapture(e.pointerId);
+});
+svg.addEventListener('pointermove',e=>{
+  if(!down)return;
+  const dx=e.clientX-down.sx, dy=e.clientY-down.sy;
+  if(Math.hypot(dx,dy)>4){ down.moved=true; graphEl.classList.add('panning'); }
+  if(down.moved){ view.x=down.vx+dx; view.y=down.vy+dy; applyView(); }
+});
+svg.addEventListener('pointerup',e=>{
+  graphEl.classList.remove('panning');
+  if(down&&!down.moved){
+    if(down.target) selectNode(down.target.dataset.id);
+    else backgroundClick();
+  }
+  down=null;
+});
+svg.addEventListener('wheel',e=>{
+  e.preventDefault();
+  const rect=svg.getBoundingClientRect();
+  const sx=e.clientX-rect.left, sy=e.clientY-rect.top;
+  const k2=Math.min(2.6,Math.max(.3,view.k*Math.exp(-e.deltaY*0.0013)));
+  const wx=(sx-view.x)/view.k, wy=(sy-view.y)/view.k;
+  view.k=k2; view.x=sx-wx*k2; view.y=sy-wy*k2; applyView();
+},{passive:false});
+svg.addEventListener('dblclick',fitView);
+window.addEventListener('resize',fitView);
+fitView();
+
+/* capture orbit drift */
+function tick(t){
+  nodes.forEach(n=>{
+    if(!n.orbit)return;
+    const o=n.orbit, a=o.a+t*o.speed;
+    n.x=o.cx+Math.cos(a)*o.r; n.y=o.cy+Math.sin(a)*o.r;
+    const el=nodeEls.get(n.id);
+    if(el) el.setAttribute('transform',`translate(${n.x},${n.y})`);
+  });
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+/* ───────── side panel ───────── */
+const panel=document.getElementById('panel'),
+      pkind=document.getElementById('pkind'),
+      ptitle=document.getElementById('ptitle'),
+      pbody=document.getElementById('pbody');
+const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+function openPanel(kind,title,html){
+  pkind.textContent=kind; ptitle.textContent=title; pbody.innerHTML=html;
+  panel.classList.add('open');
+}
+document.getElementById('pclose').onclick=()=>panel.classList.remove('open');
+
+function agentRows(p){
+  return p.agents.map(a=>`<div class="row"><span class="dot" style="background:${stateDot(a.state)}"></span>
+    <div><b>${a.name}</b> · <span class="chip ${a.state}" style="margin:0">${a.state}</span><br>${esc(a.task)}
+    <div class="ts">last report ${a.lastReport}</div></div></div>`).join('')||'<div class="subtle">no agents assigned</div>';
+}
+function taskRows(p){
+  return p.tasks.map(t=>`<div class="row"><span class="dot" style="background:${stateDot(t.state)}"></span>
+    <div><b>${esc(t.t)}</b> <span class="ts">${t.state}</span></div></div>`).join('');
+}
+function eventRows(filter){
+  const evs=WORLD.events.filter(filter).slice(-5).reverse();
+  return evs.map(e=>`<div class="row"><span class="ts">${e.ts}</span><div>${esc(e.t)}</div></div>`)
+    .join('')||'<div class="subtle">no recent events</div>';
+}
+
+function selectNode(id){
+  const n=nodes.get(id); if(!n)return;
+  if(n.type==='decision'&&n.id==='decision-gate-desync'){ expandDecision(n); return; }
+  if(fanOpen) collapseFan();
+  if(n.type==='project'||n.type==='goal'){
+    const p=n.data;
+    openPanel(n.type==='goal'?'goal':'project',p.name,
+      `<span class="chip" style="border-color:${p.color};color:${p.color}">${p.status}</span>
+       <div class="sect">Goal</div><p>${esc(p.goal)}</p>
+       <div class="sect">Agents</div>${agentRows(p)}
+       <div class="sect">Tasks</div>${taskRows(p)}
+       <div class="sect">Recent events</div>${eventRows(e=>e.proj===p.id)}`);
+  }else if(n.type==='agent'){
+    const a=n.data;
+    openPanel('agent · '+n.proj.name,a.name,
+      `<span class="chip ${a.state}">${a.state}</span>
+       <div class="sect">Current task</div><p>${esc(a.task)}</p>
+       ${a.blockedOn?`<div class="sect">Blocked on</div><p style="color:var(--red)">◆ ${esc(WORLD.decisions.find(d=>d.id===a.blockedOn).title)}</p>`:''}
+       <div class="sect">Last report</div><p class="ts" style="font-family:var(--mono)">${a.lastReport}</p>
+       <div class="sect">Report stream</div>${eventRows(e=>e.agent===a.id)}`);
+  }else if(n.type==='task'){
+    const t=n.data;
+    openPanel('task · '+n.proj.name,t.t,
+      `<span class="chip" style="color:${stateDot(t.state)}">${t.state}</span>
+       <div class="sect">Project</div><p>${esc(n.proj.name)} — ${esc(n.proj.goal)}</p>`);
+  }else if(n.type==='capture'){
+    const c=n.data;
+    openPanel('unsorted capture','“'+c.t.slice(0,48)+(c.t.length>48?'…':'')+'”',
+      `<div class="sect">Captured</div><p class="ts" style="font-family:var(--mono)">${c.ts}</p>
+       <div class="sect">Full text</div><p>${esc(c.t)}</p>
+       <p class="subtle" style="margin-top:14px">Orbiting unattached — link it to a cluster when its home becomes obvious. Nothing forces you to file it now.</p>`);
+  }else if(n.type==='decision'){
+    const d=n.data;
+    openPanel('decision · pending',d.title,
+      `<span class="chip pending">pending · due ${d.due}</span>
+       <div class="sect">Options</div>
+       ${d.options.map(o=>`<div class="row"><span class="dot" style="background:var(--amber)"></span><div>${esc(o)}</div></div>`).join('')}
+       <p class="subtle" style="margin-top:14px">No accumulated context graph for this one yet.</p>`);
+  }
+}
+
+/* ───────── workflow 1: capture ───────── */
+const capbar=document.getElementById('capbar'), capinput=document.getElementById('capinput');
+function openCapture(){ capbar.classList.add('open'); capinput.focus(); }
+function closeCapture(){ capbar.classList.remove('open'); capinput.value=''; capinput.blur(); }
+function submitCapture(){
+  const t=capinput.value.trim(); if(!t){ closeCapture(); return; }
+  const c={t,ts:'14:30'};
+  WORLD.captures.push(c);
+  WORLD.events.push({ts:'14:30',proj:null,kind:'capture',t});
+  const n=addCaptureNode(c);
+  const g=drawNode(n);
+  g.classList.add('flash'); setTimeout(()=>g.classList.remove('flash'),4500);
+  toast('captured — unclassified','“'+t.slice(0,60)+(t.length>60?'…':'')+'” now orbiting the center');
+  closeCapture();
+}
+document.getElementById('capbtn').onclick=openCapture;
+document.getElementById('capsubmit').onclick=submitCapture;
+capinput.addEventListener('keydown',e=>{
+  if(e.key==='Enter') submitCapture();
+  if(e.key==='Escape') closeCapture();
+  e.stopPropagation();
+});
+document.addEventListener('keydown',e=>{
+  if(e.target.tagName==='INPUT')return;
+  if(e.key==='c'){ e.preventDefault(); openCapture(); }
+  if(e.key==='Escape'){
+    if(capbar.classList.contains('open')) closeCapture();
+    else if(fanOpen) collapseFan();
+    else panel.classList.remove('open');
+  }
+});
+
+/* ───────── workflow 2: agent report ───────── */
+let reportFired=false;
+function fireAgentReport(){
+  if(reportFired){ toast('packet-tracer','No further reports queued in this demo.'); return; }
+  reportFired=true;
+  const r=WORLD.incomingReport;
+  WORLD.events.push(r);
+  const agent=WORLD.projects[0].agents.find(a=>a.id===r.agent);
+  agent.lastReport=r.ts;
+  const g=nodeEls.get(r.agent);
+  g.classList.add('flash'); setTimeout(()=>g.classList.remove('flash'),5000);
+  toast('▶ report · packet-tracer · '+r.ts,r.t);
+  if(panel.classList.contains('open')&&ptitle.textContent==='packet-tracer')
+    selectNode('packet-tracer');
+}
+document.getElementById('reportbtn').onclick=fireAgentReport;
+setTimeout(fireAgentReport,8000);
+
+/* ───────── workflow 3: orient & decide ───────── */
+let fanOpen=false;
+function expandDecision(n){
+  if(fanOpen) collapseFan();
+  fanOpen=true;
+  const d=n.data;
+  world.classList.add('dimmed');
+  nodeEls.get(n.id).classList.add('spot');
+  const R=155, step=360/WORLD.decisionContext.length;
+  WORLD.decisionContext.forEach((c,i)=>{
+    const a=rad(-90+step*i);
+    const x=n.x+Math.cos(a)*R, y=n.y+Math.sin(a)*R;
+    const l=document.createElementNS(NS,'line');
+    l.setAttribute('class','edge spot');
+    l.setAttribute('stroke','#8a7433');
+    l.setAttribute('x1',n.x);l.setAttribute('y1',n.y);l.setAttribute('x2',x);l.setAttribute('y2',y);
+    gFan.appendChild(l);
+    const g=document.createElementNS(NS,'g');
+    g.setAttribute('class','node sat spot fan-enter');
+    g.setAttribute('style','animation-delay:'+(i*70)+'ms');
+    g.setAttribute('transform',`translate(${x},${y})`);
+    g.innerHTML=`<circle r="11" fill="#ffd166"></circle>
+      <text class="num" y="3.5">${i+1}</text>
+      <text y="26" style="fill:#c9a94f">${c.ts}</text>`;
+    gFan.appendChild(g);
+  });
+  if(d.state==='pending'){
+    openPanel('decision · re-orientation',d.title,
+      `<span class="chip pending">pending · due ${d.due}</span><span class="chip">albion</span>
+       <div class="sect">The story so far — ${WORLD.decisionContext.length} entries, oldest first</div>
+       <div class="timeline">${WORLD.decisionContext.map((c,i)=>
+         `<div class="tl"><span class="ts">${i+1} · ${c.ts}</span><p>${esc(c.t)}</p></div>`).join('')}</div>
+       <div class="sect">Downstream</div>
+       <div class="row"><span class="dot" style="background:var(--red)"></span><div><b>navigator</b> is blocked on this decision</div></div>
+       <div class="commitbox"><div class="q">Commit a direction:</div>
+         <button class="cbtn" onclick="commitDecision(0)"><b>Choose restart-probe</b><br>${esc(d.options[0].split(': ')[1])}</button>
+         <button class="cbtn" onclick="commitDecision(1)"><b>Choose re-handshake</b><br>${esc(d.options[1].split(': ')[1])}</button>
+       </div>`);
+  }else{
+    openPanel('decision · resolved',d.title,
+      `<span class="chip resolved">resolved</span>
+       <div class="sect">Chosen</div><p>${esc(d.chosen)}</p>
+       <div class="sect">The story that led here</div>
+       <div class="timeline">${WORLD.decisionContext.map((c,i)=>
+         `<div class="tl"><span class="ts">${i+1} · ${c.ts}</span><p>${esc(c.t)}</p></div>`).join('')}</div>`);
+  }
+}
+function collapseFan(){
+  fanOpen=false;
+  world.classList.remove('dimmed');
+  nodeEls.forEach(el=>el.classList.remove('spot'));
+  gFan.innerHTML='';
+}
+function commitDecision(i){
+  const d=WORLD.decisions[0];
+  d.state='resolved'; d.chosen=d.options[i];
+  const short=i===0?'restart-probe':'re-handshake';
+  WORLD.events.push({ts:'14:32',proj:'albion',kind:'decision',t:'Decision committed: '+short+' — '+d.options[i]});
+  // decision node turns resolved
+  const dg=nodeEls.get(d.id);
+  dg.classList.add('resolved');
+  dg.querySelector('.shape').setAttribute('stroke','var(--green)');
+  dg.querySelector('.shape').setAttribute('fill','#12241a');
+  // navigator unblocks
+  const nav=WORLD.projects[0].agents.find(a=>a.id==='navigator');
+  nav.state='working'; nav.task='Cross-map routing through gates (unblocked — implementing '+short+')';
+  delete nav.blockedOn;
+  const ng=nodeEls.get('navigator');
+  ng.classList.remove('blocked'); ng.classList.add('working');
+  edgeEls.forEach(({el,e})=>{ if(e.cls==='blocked-e') el.classList.add('cleared'); });
+  // task flips
+  WORLD.projects[0].tasks[0].state='doing';
+  collapseFan();
+  toast('✓ decision resolved','Chose '+short+'. navigator unblocked; event appended to Albion stream.');
+  openPanel('decision · resolved',d.title,
+    `<span class="chip resolved">resolved · 14:32</span>
+     <div class="sect">Chosen</div><p style="color:var(--green)">✓ ${esc(d.chosen)}</p>
+     <div class="sect">Effects</div>
+     <div class="row"><span class="dot" style="background:var(--accent)"></span><div><b>navigator</b> unblocked → working</div></div>
+     <div class="row"><span class="dot" style="background:var(--accent)"></span><div>task <b>Fix gate desync</b> → doing</div></div>
+     <div class="row"><span class="dot" style="background:var(--green)"></span><div>event appended at 14:32</div></div>`);
+}
+function backgroundClick(){
+  if(fanOpen) collapseFan();
+  panel.classList.remove('open');
+}
+
+/* ───────── chrome toggles & toasts ───────── */
+const hints=document.getElementById('hints');
+document.getElementById('hintbtn').onclick=()=>hints.classList.toggle('open');
+document.getElementById('comparebtn').onclick=()=>document.getElementById('compare').classList.toggle('open');
+function toast(title,msg){
+  const d=document.createElement('div'); d.className='toast';
+  d.innerHTML=`<div class="tt">${esc(title)}</div>${esc(msg)}`;
+  document.getElementById('toasts').appendChild(d);
+  setTimeout(()=>{d.classList.add('fade'); setTimeout(()=>d.remove(),450);},5200);
+}
+setTimeout(()=>hints.classList.add('open'),600);
+</script>
+</body>
+</html>

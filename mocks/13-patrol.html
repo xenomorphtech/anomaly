@@ -1,0 +1,1167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Patrol — macro-cycle context manager</title>
+<style>
+:root{
+  --bg:#0a0e0d; --bg2:#0d1211; --panel:#111816; --panel2:#16201d; --line:#20302b;
+  --line2:#2c413a; --ink:#dcE9e4; --ink2:#a9bdb6; --dim:#728780; --faint:#4a5c56;
+  --mint:#3fd6a0; --mint2:#2aa87c; --ping:#ff9d5c; --alert:#ff6b6b; --amber:#ffcc66;
+  --albion:#e0a458; --homelab:#6fb3d2; --paper:#b58ee0; --apartment:#7fc98a; --queue:#9aa7a2;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{background:var(--bg);color:var(--ink);font:14px/1.45 var(--sans);overflow:hidden;
+  background-image:radial-gradient(1200px 600px at 50% -200px,#0f1a16 0%,var(--bg) 60%)}
+button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
+::selection{background:#2aa87c55}
+
+/* ---------- top chrome ---------- */
+#topbar{position:fixed;inset:0 0 auto 0;height:44px;display:flex;align-items:center;
+  justify-content:space-between;padding:0 14px;background:linear-gradient(#101816ee,#0d1311e6);
+  border-bottom:1px solid var(--line);z-index:60;backdrop-filter:blur(6px)}
+.badge{display:flex;align-items:center;gap:10px;min-width:0}
+.badge .logo{color:var(--mint);font-size:15px;animation:beat 4s ease-in-out infinite}
+@keyframes beat{0%,100%{opacity:.7}50%{opacity:1;text-shadow:0 0 10px #3fd6a088}}
+.badge b{font-family:var(--mono);letter-spacing:.22em;font-size:13px}
+.badge .tag{color:var(--dim);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#topbar nav{display:flex;align-items:center;gap:6px;flex:none}
+.chromebtn{padding:5px 10px;border:1px solid var(--line);border-radius:6px;color:var(--ink2);
+  font-size:12px;background:#141c1a;transition:all .15s}
+.chromebtn:hover{border-color:var(--line2);color:var(--ink);background:#1a2522}
+.chromebtn.on{border-color:var(--mint2);color:var(--mint)}
+#topbar a{color:var(--dim);font-size:12px;text-decoration:none;padding:5px 8px;border-radius:6px}
+#topbar a:hover{color:var(--ink);background:#1a2522}
+
+.drop{position:fixed;top:50px;right:14px;width:390px;background:var(--panel);border:1px solid var(--line2);
+  border-radius:10px;padding:14px 16px;z-index:70;box-shadow:0 14px 40px #000a;font-size:12.5px}
+.drop h3{font-family:var(--mono);font-size:11px;letter-spacing:.14em;color:var(--mint);
+  text-transform:uppercase;margin-bottom:8px}
+.drop ol{margin-left:18px;display:grid;gap:7px;color:var(--ink2)}
+.drop ol b{color:var(--ink)}
+.drop kbd{font-family:var(--mono);font-size:10.5px;background:#1c2825;border:1px solid var(--line2);
+  border-bottom-width:2px;border-radius:4px;padding:0 5px;color:var(--mint)}
+.drop .cols{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.drop ul{margin-left:16px;display:grid;gap:5px;color:var(--ink2)}
+.drop .plus li::marker{color:var(--mint)} .drop .minus li::marker{color:var(--alert)}
+.drop h4{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.1em;margin-bottom:6px}
+.hidden{display:none !important}
+
+/* ---------- breadcrumb (camera back) ---------- */
+#crumb{position:fixed;top:52px;left:50%;transform:translateX(-50%);z-index:55;
+  background:#16221f;border:1px solid var(--line2);border-radius:20px;padding:4px 14px;
+  font-size:12px;color:var(--ink2);display:flex;gap:8px;align-items:center;box-shadow:0 6px 18px #0008}
+#crumb .k{font-family:var(--mono);color:var(--mint);font-size:10.5px}
+
+/* ---------- stage / resume card ---------- */
+#stage{position:absolute;inset:44px 0 118px 0;display:flex;align-items:stretch;
+  justify-content:center;overflow:hidden}
+.card{width:min(880px,94vw);margin:18px 0 6px;background:linear-gradient(#131b19,#101715);
+  border:1px solid var(--line2);border-radius:14px;display:flex;flex-direction:column;
+  overflow:hidden;position:relative;box-shadow:0 20px 60px #0009;
+  animation:cardIn .28s cubic-bezier(.2,.8,.3,1)}
+.card.expanded{width:min(1180px,97vw)}
+@keyframes cardIn{from{transform:translateX(46px) scale(.985);opacity:0}to{transform:none;opacity:1}}
+.card.back{animation:cardBack .28s cubic-bezier(.2,.8,.3,1)}
+@keyframes cardBack{from{transform:translateX(-46px) scale(.985);opacity:0}to{transform:none;opacity:1}}
+.card.fog-cooling .cardbody{filter:saturate(.75) brightness(.94)}
+.card.fog-cold .cardbody{filter:saturate(.4) brightness(.8)}
+.card.fog-frozen .cardbody{filter:saturate(.15) brightness(.68)}
+.card.defrost .cardbody{filter:none;transition:filter 1.1s ease}
+.cardhead{padding:16px 22px 0;flex:none}
+.stopline{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:10.5px;
+  letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
+.stopline .swatch{width:9px;height:9px;border-radius:2px;flex:none}
+.stopline .age{margin-left:auto;letter-spacing:.05em}
+.stopline .age.warm{color:var(--mint)} .stopline .age.cooling{color:var(--amber)}
+.stopline .age.cold{color:var(--ping)} .stopline .age.frozen{color:var(--alert)}
+.cardtitle{display:flex;align-items:baseline;gap:12px;margin-top:6px}
+.cardtitle h1{font-size:23px;font-weight:650;letter-spacing:-.01em}
+.cardtitle .goal{color:var(--dim);font-size:12.5px}
+.delta{margin:14px 22px 0;padding:12px 16px;border-radius:10px;flex:none;
+  background:linear-gradient(90deg,#12241e,#101a17 70%);border:1px solid #234437;
+  display:flex;gap:12px;align-items:baseline}
+.delta .since{font-family:var(--mono);font-size:10.5px;color:var(--mint);letter-spacing:.1em;
+  text-transform:uppercase;flex:none}
+.delta .dtext{font-size:14.5px;color:var(--ink)}
+.delta.quiet{background:#101715;border-color:var(--line)}
+.delta.quiet .since{color:var(--dim)} .delta.quiet .dtext{color:var(--ink2)}
+.coldbar{margin:12px 22px 0;padding:11px 16px;border-radius:10px;flex:none;display:flex;
+  align-items:center;gap:12px;background:#1d1512;border:1px solid #4a3020}
+.coldbar .msg{color:#e8c9a8;font-size:13px}
+.coldbar button{margin-left:auto;flex:none}
+.cardbody{flex:1;overflow-y:auto;padding:6px 22px 18px;display:grid;gap:16px;align-content:start}
+.cardbody::-webkit-scrollbar{width:8px}
+.cardbody::-webkit-scrollbar-thumb{background:#22322d;border-radius:4px}
+.sect{margin-top:8px}
+.sect h2{font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--dim);margin-bottom:8px;display:flex;align-items:center;gap:8px}
+.sect h2::after{content:"";flex:1;height:1px;background:var(--line)}
+.sect h2 .n{color:var(--mint)}
+
+/* agents */
+.agent{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--line);
+  border-radius:8px;background:#121a18;margin-bottom:6px;transition:border-color .15s}
+.agent:hover{border-color:var(--line2)}
+.agent .st{width:8px;height:8px;border-radius:50%;flex:none}
+.st.working{background:var(--mint);box-shadow:0 0 8px #3fd6a077;animation:beat 2.4s infinite}
+.st.blocked{background:var(--alert);box-shadow:0 0 8px #ff6b6b66}
+.st.idle{background:var(--faint)}
+.agent .aname{font-family:var(--mono);font-size:12px;flex:none;min-width:100px}
+.agent .atask{color:var(--ink2);font-size:12.5px;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.agent .ats{font-family:var(--mono);font-size:10.5px;color:var(--faint);flex:none}
+.agent .why{color:var(--alert);font-size:11.5px;flex:none}
+
+/* triage items */
+.titem{display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--line);
+  border-left:3px solid var(--faint);border-radius:8px;background:#131b19;margin-bottom:6px;
+  transition:all .2s}
+.titem:hover{border-color:var(--line2);border-left-color:inherit}
+.titem.k-status{border-left-color:var(--mint2)} .titem.k-blocked{border-left-color:var(--alert)}
+.titem.k-note{border-left-color:var(--homelab)} .titem.k-decision{border-left-color:var(--amber)}
+.titem.k-capture{border-left-color:var(--queue)}
+.titem.done{opacity:.38;text-decoration:line-through}
+.titem.snoozed{opacity:.45}
+.titem .tts{font-family:var(--mono);font-size:10.5px;color:var(--faint);flex:none;width:44px}
+.titem .ttext{flex:1;font-size:13px;color:var(--ink);min-width:0}
+.titem .chip{font-family:var(--mono);font-size:10px;padding:1px 7px;border-radius:9px;
+  border:1px solid var(--mint2);color:var(--mint);flex:none}
+.tacts{display:flex;gap:4px;flex:none;opacity:.35;transition:opacity .15s}
+.titem:hover .tacts{opacity:1}
+.tacts button{font-family:var(--mono);font-size:10.5px;padding:3px 8px;border-radius:5px;
+  border:1px solid var(--line2);color:var(--ink2);background:#182220}
+.tacts button:hover{color:var(--ink);border-color:var(--mint2);background:#1c2a26}
+.empty{color:var(--faint);font-size:12.5px;font-style:italic;padding:4px 2px}
+
+/* tasks / next actions */
+.taskrow{display:flex;align-items:center;gap:9px;padding:6px 4px;font-size:13px;color:var(--ink2)}
+.taskrow .tk{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;
+  padding:1px 7px;border-radius:4px;flex:none;width:64px;text-align:center}
+.tk.todo{background:#1a2422;color:var(--dim)} .tk.doing{background:#153428;color:var(--mint)}
+.tk.done{background:#141b19;color:var(--faint);}
+.tk.blocked{background:#341a1a;color:var(--alert)}
+.taskrow.isdone{opacity:.45;text-decoration:line-through}
+.nextact{display:flex;align-items:center;gap:8px;padding:8px 12px;margin-bottom:6px;
+  border-radius:8px;background:#12241e;border:1px solid #1f3a30;font-size:13px}
+.nextact::before{content:"→";color:var(--mint);font-weight:700}
+.cardfoot{flex:none;padding:9px 22px;border-top:1px solid var(--line);display:flex;
+  justify-content:space-between;color:var(--faint);font-size:11.5px;font-family:var(--mono)}
+.cardfoot .nx b{color:var(--ink2)}
+
+/* decision rows (queue stop) */
+.decrow{display:flex;align-items:center;gap:10px;padding:10px 12px;margin-bottom:7px;
+  border:1px solid #3d331c;border-left:3px solid var(--amber);border-radius:8px;
+  background:#181510;cursor:pointer;transition:all .15s}
+.decrow:hover{background:#1e1a12;border-color:#55471f}
+.decrow .dt{flex:1;font-size:13.5px}
+.decrow .due{font-family:var(--mono);font-size:10.5px;color:var(--amber);flex:none}
+.decrow.resolved{border-left-color:var(--mint2);border-color:var(--line);background:#121a18;cursor:default;opacity:.75}
+.decrow.resolved .due{color:var(--mint)}
+.pill{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;
+  padding:2px 8px;border-radius:9px;flex:none}
+.pill.pend{background:#33280f;color:var(--amber)} .pill.res{background:#123125;color:var(--mint)}
+
+/* ---------- patrol HUD ---------- */
+#hud{position:fixed;inset:auto 0 0 0;height:118px;background:linear-gradient(#0e1513f2,#0b100ff8);
+  border-top:1px solid var(--line);display:flex;align-items:center;gap:18px;
+  padding:0 18px;z-index:60}
+#ringWrap{flex:none;display:flex;align-items:center;gap:12px}
+#ring{cursor:pointer}
+#ring .seg{fill:none;stroke-width:7;stroke-linecap:round;opacity:.85;transition:opacity .2s,stroke-width .2s}
+#ring .seg:hover{opacity:1;stroke-width:9}
+#ring .seg.cur{stroke-width:10;opacity:1;filter:drop-shadow(0 0 5px currentColor)}
+#ring .lbl{font:600 8px var(--mono);fill:var(--dim);text-anchor:middle;pointer-events:none;letter-spacing:.06em}
+#ring .lbl.cur{fill:var(--ink)}
+#ring .marker{pointer-events:none}
+#ring .mark-blocked{fill:var(--alert);animation:markBlink 1.6s infinite}
+#ring .mark-decision{fill:var(--amber)}
+@keyframes markBlink{0%,100%{opacity:1}50%{opacity:.35}}
+#ring .ping{fill:var(--ping);pointer-events:none;animation:pingPop .5s ease-out}
+@keyframes pingPop{0%{r:9;opacity:1}100%{opacity:inherit}}
+#ring .cursor{fill:var(--ink);stroke:#0a0e0d;stroke-width:1.5;transition:cx .3s,cy .3s}
+#dotsCol{display:flex;flex-direction:column;gap:6px}
+#dots{display:flex;gap:6px}
+#dots i{width:8px;height:8px;border-radius:50%;border:1px solid var(--dim);transition:all .2s}
+#dots i.on{background:var(--mint);border-color:var(--mint);box-shadow:0 0 6px #3fd6a088}
+#dots i.seen{background:var(--faint);border-color:var(--faint)}
+#cycLbl{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;color:var(--dim);text-transform:uppercase}
+
+#dials{flex:1;display:flex;gap:10px;justify-content:center}
+.dial{position:relative;width:118px;padding:8px 8px 6px;border:1px solid var(--line);border-radius:10px;
+  background:#101715;display:flex;gap:9px;align-items:center;cursor:pointer;transition:all .15s}
+.dial:hover{border-color:var(--line2);background:#141d1a}
+.dial.cur{border-color:var(--mint2);background:#122019;box-shadow:0 0 0 1px #2aa87c44}
+.dial svg{flex:none}
+.dial .ring-bg{stroke:#1d2926;fill:none}
+.dial .ring-fg{fill:none;stroke-linecap:round;transform:rotate(-90deg);transform-origin:center;
+  transition:stroke-dashoffset 1s cubic-bezier(.3,.8,.3,1),stroke .4s}
+.dial .kn{position:absolute;top:-7px;left:-7px;width:17px;height:17px;border-radius:5px;
+  background:#1a2522;border:1px solid var(--line2);color:var(--mint);font:700 10px var(--mono);
+  display:flex;align-items:center;justify-content:center}
+.dial .info{min-width:0}
+.dial .nm{font-size:11.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dial .agelbl{font-family:var(--mono);font-size:10px;color:var(--dim)}
+.dial.t-warm .agelbl{color:var(--mint)} .dial.t-cooling .agelbl{color:var(--amber)}
+.dial.t-cold .agelbl{color:var(--ping)} .dial.t-frozen .agelbl{color:var(--alert)}
+.dial.t-cold .nm,.dial.t-frozen .nm{color:var(--dim)}
+.dial .badge2{position:absolute;top:-7px;right:-6px;min-width:17px;height:17px;padding:0 4px;
+  border-radius:9px;background:var(--ping);color:#1a0f06;font:700 10px var(--mono);
+  display:flex;align-items:center;justify-content:center;animation:markBlink 2s infinite}
+.dial .num{font:700 11px var(--mono);fill:var(--ink2)}
+
+#hudRight{flex:none;display:flex;flex-direction:column;gap:7px;align-items:flex-end}
+#hudRight .row{display:flex;gap:7px}
+.hudbtn{display:flex;align-items:center;gap:7px;padding:7px 12px;border-radius:8px;
+  border:1px solid var(--line2);background:#141d1a;font-size:12px;color:var(--ink2);transition:all .15s}
+.hudbtn:hover{color:var(--ink);border-color:var(--mint2);background:#182420}
+#idleBtn{border-color:#4a3020}
+#idleBtn b{font-family:var(--mono);background:#33280f;color:var(--amber);border-radius:9px;
+  min-width:18px;height:18px;display:flex;align-items:center;justify-content:center;font-size:11px;padding:0 4px}
+#idleBtn.zero{opacity:.5;border-color:var(--line)}
+#idleBtn.zero b{background:#123125;color:var(--mint)}
+#hints{font-family:var(--mono);font-size:10px;color:var(--faint);letter-spacing:.03em}
+#hints kbd{color:var(--dim);background:#141d1a;border:1px solid var(--line);border-radius:3px;padding:0 4px}
+
+/* ---------- toasts ---------- */
+#toasts{position:fixed;right:16px;bottom:132px;z-index:80;display:flex;flex-direction:column;
+  gap:8px;align-items:flex-end}
+.toast{width:330px;background:#141d1a;border:1px solid var(--line2);border-left:3px solid var(--ping);
+  border-radius:9px;padding:10px 13px;box-shadow:0 10px 30px #000a;cursor:pointer;
+  animation:toastIn .3s cubic-bezier(.2,.8,.3,1);transition:opacity .5s,transform .3s}
+.toast:hover{transform:translateX(-3px)}
+.toast.gone{opacity:0;pointer-events:none}
+@keyframes toastIn{from{transform:translateX(40px);opacity:0}to{transform:none;opacity:1}}
+.toast .th{display:flex;gap:8px;align-items:center;font-family:var(--mono);font-size:10px;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--ping);margin-bottom:4px}
+.toast .th .sp{margin-left:auto;color:var(--faint)}
+.toast .tb{font-size:12.5px;color:var(--ink2)}
+.toast .off{margin-top:6px;font-family:var(--mono);font-size:10px;color:var(--faint)}
+.toast .off kbd{color:var(--mint)}
+.toast.ok{border-left-color:var(--mint)} .toast.ok .th{color:var(--mint)}
+
+/* ---------- overlays ---------- */
+#ovl{position:fixed;inset:0;z-index:90;background:#060909cc;backdrop-filter:blur(3px);
+  display:flex;align-items:center;justify-content:center;animation:ovlIn .2s}
+@keyframes ovlIn{from{opacity:0}to{opacity:1}}
+.panel{width:min(640px,93vw);max-height:82vh;display:flex;flex-direction:column;background:var(--panel);
+  border:1px solid var(--line2);border-radius:13px;box-shadow:0 30px 80px #000d;overflow:hidden;
+  animation:panelIn .25s cubic-bezier(.2,.8,.3,1)}
+@keyframes panelIn{from{transform:translateY(18px) scale(.98);opacity:0}to{transform:none;opacity:1}}
+.phead{padding:14px 18px 12px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
+.phead h2{font-size:15px;font-weight:650;flex:1}
+.phead .sub{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+.phead .x{color:var(--dim);font-size:16px;padding:2px 8px;border-radius:6px}
+.phead .x:hover{color:var(--ink);background:#1a2522}
+.pbody{padding:14px 18px;overflow-y:auto;flex:1}
+.pfoot{padding:12px 18px;border-top:1px solid var(--line);display:flex;gap:8px;justify-content:flex-end;align-items:center}
+.pfoot .note{margin-right:auto;font-size:11.5px;color:var(--faint)}
+.btn{padding:8px 14px;border-radius:8px;border:1px solid var(--line2);background:#161f1c;
+  font-size:12.5px;color:var(--ink2);transition:all .15s}
+.btn:hover{color:var(--ink);border-color:var(--mint2)}
+.btn.primary{background:#153428;border-color:var(--mint2);color:var(--mint)}
+.btn.primary:hover{background:#1a4030;color:#7de9c0}
+.btn.warn{background:#33200f;border-color:#5a3d1c;color:var(--amber)}
+.btn.warn:hover{background:#3e2812}
+#capInput{width:100%;background:#0d1311;border:1px solid var(--line2);border-radius:8px;
+  color:var(--ink);font:14px var(--sans);padding:11px 13px;outline:none}
+#capInput:focus{border-color:var(--mint2);box-shadow:0 0 0 2px #2aa87c33}
+.caphint{margin-top:9px;font-size:11.5px;color:var(--faint)}
+
+/* replay */
+.rstep{display:flex;gap:12px;padding:9px 4px;border-bottom:1px dashed var(--line);
+  animation:stepIn .35s ease-out;align-items:baseline}
+@keyframes stepIn{from{transform:translateY(8px);opacity:0}to{transform:none;opacity:1}}
+.rstep .rts{font-family:var(--mono);font-size:10.5px;color:var(--mint);flex:none;width:96px}
+.rstep .rt{font-size:13px;color:var(--ink2)}
+.rstep.latest .rt{color:var(--ink)}
+.rstep.insight{background:#12241e;border-radius:7px;padding:9px 10px;border-bottom:0}
+.rstep.insight .rt{color:#a9e8cd}
+.rprog{font-family:var(--mono);font-size:10.5px;color:var(--dim)}
+.optbtn{display:block;width:100%;text-align:left;padding:12px 14px;margin-bottom:8px;border-radius:9px;
+  border:1px solid var(--line2);background:#141d1a;font-size:13px;color:var(--ink);transition:all .15s}
+.optbtn:hover{border-color:var(--mint2);background:#172622;transform:translateX(2px)}
+.optbtn .ok{font-family:var(--mono);font-size:10px;color:var(--mint);letter-spacing:.1em;text-transform:uppercase;display:block;margin-bottom:3px}
+
+/* idle cycle panel */
+.idlecard{border:1px solid var(--line2);border-radius:10px;padding:14px;background:#131b19}
+.idlecard .top{display:flex;align-items:center;gap:9px;margin-bottom:8px}
+.idlecard .top .aname{font-family:var(--mono);font-size:13px;font-weight:700}
+.idlecard .top .proj{font-size:11px;color:var(--dim)}
+.idlecard .why{color:var(--ink2);font-size:13px;margin-bottom:10px}
+.idlecard .sug{display:flex;gap:8px;align-items:center;padding:9px 12px;border-radius:8px;
+  background:#12241e;border:1px solid #1f3a30;font-size:12.5px}
+.idlecard .sug b{color:var(--mint);font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;flex:none}
+
+.fadeghost{animation:ghost .4s ease-out}
+@keyframes ghost{from{background:#2aa87c33}to{background:transparent}}
+@media (max-width:1100px){.badge .tag{display:none}#dials{gap:6px}.dial{width:104px}}
+</style>
+</head>
+<body>
+
+<header id="topbar">
+  <div class="badge">
+    <span class="logo">◉</span><b>PATROL</b>
+    <span class="tag">the macro cycle as a first-class object — one rehearsed rotation, delta-first stops · fuses context-stack (10) + inbox triage (04) + timeline replay (02)</span>
+  </div>
+  <nav>
+    <button class="chromebtn" id="wfBtn">Try the workflows</button>
+    <button class="chromebtn" id="cmpBtn">ⓘ compare</button>
+    <a href="index.html">← index</a>
+  </nav>
+</header>
+
+<div class="drop hidden" id="wfPanel">
+  <h3>Try the workflows</h3>
+  <ol>
+    <li><b>Capture</b> — press <kbd>c</kbd> (or the + capture button). Type a thought, <kbd>Enter</kbd>. It lands unclassified in the Queue stop — no filing required.</li>
+    <li><b>Alert contract</b> — click <b>▶ simulate report</b> (also auto-fires once ~8s in). Watch: ping on the ring, corner toast, badge on the Albion dial — your view never moves. <kbd>Space</kbd> jumps to it, <kbd>Esc</kbd> brings the camera back.</li>
+    <li><b>The sweep</b> — press <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd> (or ride <kbd>Tab</kbd>/<kbd>.</kbd> around the loop). Every stop leads with its delta since you left; staleness dials refill as fog clears.</li>
+    <li><b>Idle button</b> — click <b>⚠ idle/blocked 2</b> (or <kbd>i</kbd>) and click through both stuck agents: why they're stuck + suggested next action.</li>
+    <li><b>Deep recovery + decision</b> — visit Paper (<kbd>3</kbd>) or Apartment (<kbd>4</kbd>) and hit <b>Rebuild context</b> for the replay. Then open the gate-desync decision (Albion card or Queue stop), replay its history, commit — navigator unblocks, idle count drops.</li>
+  </ol>
+</div>
+
+<div class="drop hidden" id="cmpPanel">
+  <h3>Patrol — honest trade-offs</h3>
+  <div class="cols">
+    <div><h4>Strengths</h4>
+      <ul class="plus">
+        <li>The 1-2-3-4 sweep is a rehearsed ~10s ritual; delta-first cards make re-entry nearly free.</li>
+        <li>Triage happens <i>on</i> the context it belongs to — no separate inbox to reconcile.</li>
+        <li>Staleness dials turn "when did I last look?" into a glance.</li>
+      </ul>
+    </div>
+    <div><h4>Weaknesses</h4>
+      <ul class="minus">
+        <li>One full-screen card at a time — no cross-project side-by-side.</li>
+        <li>A linear ring buries urgent stops mid-cycle; Space mitigates but breaks the rhythm.</li>
+        <li>Skip patrol for a week and every stop goes cold — replay recovery gets expensive.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<div id="crumb" class="hidden"></div>
+
+<main id="stage"></main>
+
+<div id="hud">
+  <div id="ringWrap">
+    <svg id="ring" width="104" height="104" viewBox="0 0 104 104" aria-label="patrol ring minimap"></svg>
+    <div id="dotsCol">
+      <span id="cycLbl">cycle</span>
+      <div id="dots"></div>
+    </div>
+  </div>
+  <div id="dials"></div>
+  <div id="hudRight">
+    <div class="row">
+      <button class="hudbtn" id="idleBtn" title="cycle through idle/blocked agents (i)">⚠ idle/blocked <b id="idleCount">2</b></button>
+      <button class="hudbtn" id="capBtn" title="quick capture (c)">＋ capture</button>
+      <button class="hudbtn" id="simBtn" title="simulate incoming agent report">▶ simulate report</button>
+    </div>
+    <div id="hints"><kbd>Tab</kbd>/<kbd>.</kbd> next stop · <kbd>1–4</kbd> jump (double-tap = expand) · <kbd>Space</kbd> alert · <kbd>Esc</kbd>/<kbd>0</kbd> back · <kbd>c</kbd> capture · <kbd>i</kbd> idle</div>
+  </div>
+</div>
+
+<div id="toasts"></div>
+
+<script>
+/* ================= WORLD (shared dataset, per SPEC.md) ================= */
+const WORLD = {
+  now: "2026-08-22T14:30:00",
+  projects: [
+    { id: "albion", name: "Albion Automation", color: "#e0a458",
+      status: "active", goal: "Fully autonomous gathering + market loop",
+      agents: [
+        { id: "packet-tracer", name: "packet-tracer", state: "working",
+          task: "Instrument gate transition packets", lastReport: "12:41" },
+        { id: "navigator", name: "navigator", state: "blocked",
+          task: "Cross-map routing through gates", lastReport: "11:58",
+          blockedOn: "decision-gate-desync" },
+        { id: "market-bot", name: "market-bot", state: "idle",
+          task: "Waiting on price feed refactor", lastReport: "09:12" }
+      ],
+      tasks: [
+        { t: "Fix gate desync", state: "blocked" },
+        { t: "Price feed refactor", state: "todo" },
+        { t: "Resource route optimizer", state: "done" }
+      ]},
+    { id: "homelab", name: "Homelab Migration", color: "#6fb3d2",
+      status: "active", goal: "Move all services from old NUC to Proxmox cluster",
+      agents: [
+        { id: "infra-agent", name: "infra-agent", state: "working",
+          task: "Migrating Postgres volumes to new ZFS pool", lastReport: "14:07" }
+      ],
+      tasks: [
+        { t: "Migrate Postgres volumes", state: "doing" },
+        { t: "Move reverse proxy + certs", state: "todo" },
+        { t: "Decommission old NUC", state: "todo" }
+      ]},
+    { id: "paper", name: "Anomaly Detection Paper", color: "#b58ee0",
+      status: "deadline", goal: "Submit to conference — deadline Sep 5",
+      agents: [],
+      tasks: [
+        { t: "Rerun eval on v2 dataset", state: "doing" },
+        { t: "Write related-work section", state: "todo" },
+        { t: "Address advisor comments", state: "blocked" }
+      ]},
+    { id: "apartment", name: "Apartment Hunt", color: "#7fc98a",
+      status: "background", goal: "Find 2br under budget before Nov",
+      agents: [],
+      tasks: [
+        { t: "Visit Riverside listing", state: "todo" },
+        { t: "Compare commute times", state: "todo" }
+      ]}
+  ],
+  captures: [
+    { t: "idea: agents should emit confidence with every status report", ts: "13:22" },
+    { t: "check if ZFS snapshot schedule survives migration", ts: "10:45" },
+    { t: "landlord mentioned garage option?? follow up", ts: "yesterday" }
+  ],
+  events: [
+    { ts: "09:12", proj: "albion", agent: "market-bot", kind: "status", t: "Paused: price feed schema changed upstream, refactor needed" },
+    { ts: "10:03", proj: "paper", kind: "note", t: "Advisor replied: eval section needs v2 dataset numbers" },
+    { ts: "10:45", proj: null, kind: "capture", t: "check if ZFS snapshot schedule survives migration" },
+    { ts: "11:20", proj: "albion", agent: "packet-tracer", kind: "status", t: "Gate-probe run #2: emitted 1 move, restarted client — server position UNCHANGED" },
+    { ts: "11:58", proj: "albion", agent: "navigator", kind: "blocked", t: "Blocked: cannot route through gates until desync strategy chosen" },
+    { ts: "12:41", proj: "albion", agent: "packet-tracer", kind: "status", t: "Gate-probe run #3: same result. Server never applied any move after gate transition" },
+    { ts: "13:22", proj: null, kind: "capture", t: "idea: agents should emit confidence with every status report" },
+    { ts: "14:07", proj: "homelab", agent: "infra-agent", kind: "status", t: "Postgres volume 2/5 migrated, ETA 40m for remainder" }
+  ],
+  decisions: [
+    { id: "decision-gate-desync", proj: "albion", state: "pending",
+      title: "Gate desync fix: restart-probe vs re-handshake",
+      options: ["Restart-probe: auto-restart client after each gate to resync",
+                "Re-handshake: reverse-engineer and replay the gate handshake packets"],
+      due: "today" },
+    { id: "decision-eval-scope", proj: "paper", state: "pending",
+      title: "Eval scope: rerun full grid or only v2 delta",
+      options: ["Full grid (2 days compute)", "v2 delta only (4h, weaker claim)"],
+      due: "Aug 25" }
+  ],
+  decisionContext: [
+    { ts: "Aug 19 16:10", t: "navigator first reported chars 'rubber-banding' to gate entrance after transitions" },
+    { ts: "Aug 19 18:34", t: "hypothesis 1: movement-lock flag not cleared — DISPROVEN (flag clears in packet trace)" },
+    { ts: "Aug 20 11:02", t: "hypothesis 2: reliable-seq collision after zone load — DISPROVEN (seqs contiguous)" },
+    { ts: "Aug 20 15:47", t: "key insight: all movement after gate is client-side prediction; server acks contain no position echo" },
+    { ts: "Aug 21 12:30", t: "restart experiment: emit 1 move, restart client, read authoritative resume position → server never moved the char" },
+    { ts: "Aug 21 12:55", t: "conclusion: server drops move stream after gate until a fresh handshake occurs. Two viable fixes identified" },
+    { ts: "Aug 22 12:41", t: "packet-tracer run #3 confirms: reproducible 3/3 times" }
+  ],
+  incomingReport: { ts: "14:31", proj: "albion", agent: "packet-tracer", kind: "status",
+    t: "Gate-probe run #4 complete: server pos unchanged after 3 moves — desync confirmed at handshake layer" }
+};
+/* Round-2 WORLD extension (SPEC2.md) */
+WORLD.lastVisited = { albion: "13:05", homelab: "14:10", paper: "2026-08-21T18:00", apartment: "2026-08-19T09:30" };
+WORLD.sinceLastVisit = { albion: 2, homelab: 1, paper: 1, apartment: 0 };
+
+/* ================= time helpers ================= */
+const DAY = 1440;
+function toMin(ts){ // absolute minutes since 2026-08-19T00:00 (arbitrary epoch)
+  if (ts.indexOf("T") >= 0) {
+    const d = new Date(ts), e = new Date("2026-08-19T00:00:00");
+    return Math.round((d - e) / 60000);
+  }
+  const p = ts.split(":"); // today HH:MM
+  return 3 * DAY + (+p[0]) * 60 + (+p[1]);
+}
+let simNow = toMin(WORLD.now); // ticks forward when the report lands
+function fmtAge(mins){
+  if (mins < 1) return "just now";
+  if (mins < 60) return mins + "m";
+  if (mins < DAY) { const h = Math.floor(mins/60); return h + "h" + (mins%60 ? " " + mins%60 + "m" : ""); }
+  return Math.round(mins/DAY * 10)/10 + "d";
+}
+function tierOf(mins){ return mins < 30 ? "warm" : mins < 120 ? "cooling" : mins < DAY ? "cold" : "frozen"; }
+function esc(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+const byId = id => WORLD.projects.find(p => p.id === id);
+const $ = id => document.getElementById(id);
+
+/* ================= state ================= */
+const STOPS = ["albion", "homelab", "paper", "apartment", "queue"];
+const S = {
+  idx: 0,
+  prevIdx: null,          // for slide direction
+  lastVisit: {},          // proj -> abs minutes
+  unseen: Object.assign({}, WORLD.sinceLastVisit),
+  deltaSnap: {},          // proj -> {age, items[]} frozen at stop entry
+  visitedThisCycle: new Set(),
+  alerts: [],             // unseen alert queue for Space: {proj, text}
+  crumb: null,            // stop index Space jumped from
+  pings: [],              // {proj, born(ms), sev}
+  triage: {},             // proj -> [{id, ts, text, kind, state:'open'|'done'|'snoozed', assigned}]
+  captures: WORLD.captures.map((c,i)=>({ id:"cap"+i, ts:c.ts, text:c.t, kind:"capture", state:"open", assigned:null })),
+  decisions: WORLD.decisions.map(d=>Object.assign({}, d)),
+  events: WORLD.events.slice(),
+  expanded: false,
+  reportFired: false,
+  idleIdx: -1,
+  caughtUp: {},           // proj -> true once replay finished
+  keyLast: { k:null, t:0 } // double-press detect
+};
+for (const k in WORLD.lastVisited) S.lastVisit[k] = toMin(WORLD.lastVisited[k]);
+
+/* seed per-project triage items (what's new since you left) */
+S.triage.albion = [
+  { id:"a1", ts:"11:58", kind:"blocked", agent:"navigator",
+    text:"navigator blocked: cannot route through gates until desync strategy chosen", state:"open", assigned:null, dec:"decision-gate-desync" },
+  { id:"a2", ts:"12:41", kind:"status", agent:"packet-tracer",
+    text:"probe #3 confirmed: server never applied any move after gate transition (3/3)", state:"open", assigned:null }
+];
+S.triage.homelab = [
+  { id:"h1", ts:"14:07", kind:"status", agent:"infra-agent",
+    text:"Postgres volume 2/5 migrated, ETA 40m for remainder", state:"open", assigned:null }
+];
+S.triage.paper = [
+  { id:"p1", ts:"10:03", kind:"note",
+    text:"Advisor replied: eval section needs v2 dataset numbers", state:"open", assigned:null }
+];
+S.triage.apartment = [];
+
+function deltaLine(proj){
+  const snap = S.deltaSnap[proj];
+  if (!snap) return null;
+  const open = snap.items;
+  if (!open.length) return { quiet:true, txt:"all quiet — nothing new since your last pass" };
+  const heads = open.map(i => i.kind === "blocked" ? (i.agent||"agent") + " blocked"
+    : i.kind === "note" ? "advisor note" : i.kind === "capture" ? "new capture"
+    : (i.agent ? i.agent + " reported" : "update")).slice(0,3);
+  return { quiet:false, txt: open.length + " new — " + heads.join(", ") };
+}
+function idleAgents(){
+  const out = [];
+  for (const p of WORLD.projects) for (const a of p.agents)
+    if (a.state === "idle" || a.state === "blocked") out.push({ p, a });
+  return out;
+}
+function pendingDecisions(){ return S.decisions.filter(d => d.state === "pending"); }
+
+/* ================= ring minimap (glance surface) ================= */
+const RING = { cx:52, cy:52, r:38 };
+function arcPath(a0, a1, r){
+  const p = a => [RING.cx + r*Math.cos(a), RING.cy + r*Math.sin(a)];
+  const [x0,y0] = p(a0), [x1,y1] = p(a1);
+  return "M" + x0.toFixed(1) + " " + y0.toFixed(1) + " A" + r + " " + r + " 0 " + ((a1-a0) > Math.PI ? 1 : 0) + " 1 " + x1.toFixed(1) + " " + y1.toFixed(1);
+}
+function segAngles(i){ // 5 segments, gap 10°, start at top
+  const span = 2*Math.PI/5, gap = 0.16;
+  const a0 = -Math.PI/2 + i*span + gap/2;
+  return [a0, a0 + span - gap];
+}
+function segMid(i, r){
+  const [a0,a1] = segAngles(i), a = (a0+a1)/2;
+  return [RING.cx + r*Math.cos(a), RING.cy + r*Math.sin(a), a];
+}
+function segColor(stop){ return stop === "queue" ? "var(--queue)" : byId(stop).color; }
+function segLabel(stop){ return stop === "queue" ? "Q" : String(STOPS.indexOf(stop)+1); }
+
+function renderRing(){
+  const svg = $("ring");
+  let h = "";
+  STOPS.forEach((stop, i) => {
+    const [a0,a1] = segAngles(i);
+    const cur = i === S.idx;
+    const tier = stop === "queue" ? "warm" : tierOf(simNow - S.lastVisit[stop]);
+    const fade = tier === "cold" ? .45 : tier === "frozen" ? .28 : .85;
+    h += '<path class="seg' + (cur ? " cur" : "") + '" d="' + arcPath(a0,a1,RING.r) +
+      '" stroke="' + segColor(stop) + '" style="color:' + segColor(stop) + (cur ? "" : ";opacity:" + fade) +
+      '" data-i="' + i + '"><title>' + esc(stop === "queue" ? "Queue — captures + decisions" : byId(stop).name) + '</title></path>';
+    const [lx,ly] = segMid(i, RING.r - 14);
+    h += '<text class="lbl' + (cur ? " cur" : "") + '" x="' + lx.toFixed(1) + '" y="' + (ly+3).toFixed(1) + '">' + segLabel(stop) + '</text>';
+  });
+  /* persistent markers: blocked agents + pending decisions on their segments */
+  const marks = {}; // stop -> count placed (spread them along arc)
+  function place(stop, cls, shape){
+    const i = STOPS.indexOf(stop);
+    const n = (marks[stop] = (marks[stop]||0) + 1);
+    const [a0,a1] = segAngles(i);
+    const a = a0 + (a1-a0) * (0.28 + 0.3*(n-1));
+    const r = RING.r + 9;
+    const x = RING.cx + r*Math.cos(a), y = RING.cy + r*Math.sin(a);
+    if (shape === "diamond")
+      h += '<rect class="marker ' + cls + '" x="' + (x-3.2).toFixed(1) + '" y="' + (y-3.2).toFixed(1) + '" width="6.4" height="6.4" transform="rotate(45 ' + x.toFixed(1) + ' ' + y.toFixed(1) + ')"/>';
+    else
+      h += '<circle class="marker ' + cls + '" cx="' + x.toFixed(1) + '" cy="' + y.toFixed(1) + '" r="3.1"/>';
+  }
+  for (const {p,a} of idleAgents()) if (a.state === "blocked") place(p.id, "mark-blocked", "dot");
+  for (const d of pendingDecisions()) place(d.proj, "mark-decision", "diamond");
+  /* fading pings (≈30s) */
+  const now = Date.now();
+  S.pings = S.pings.filter(pg => now - pg.born < 30000);
+  S.pings.forEach((pg, n) => {
+    const i = STOPS.indexOf(pg.proj);
+    const [x,y] = segMid(i, RING.r + 9 + (n%2)*7);
+    const op = Math.max(0, 1 - (now - pg.born)/30000);
+    h += '<circle class="ping" cx="' + x.toFixed(1) + '" cy="' + y.toFixed(1) + '" r="4" style="opacity:' + op.toFixed(2) + '"/>';
+  });
+  /* patrol cursor on current segment */
+  const [cx,cy] = segMid(S.idx, RING.r);
+  h += '<circle class="cursor" cx="' + cx.toFixed(1) + '" cy="' + cy.toFixed(1) + '" r="4.5"/>';
+  svg.innerHTML = h;
+  svg.querySelectorAll(".seg").forEach(el =>
+    el.addEventListener("click", () => goTo(+el.dataset.i, "jump")));
+}
+
+/* ================= cycle dots + dials ================= */
+function renderDots(){
+  $("dots").innerHTML = STOPS.map((s,i) =>
+    '<i class="' + (i === S.idx ? "on" : S.visitedThisCycle.has(s) ? "seen" : "") + '" title="' +
+    (s === "queue" ? "Queue" : byId(s).name) + '"></i>').join("");
+}
+const prevFresh = {};
+function renderDials(){
+  const wrap = $("dials");
+  wrap.innerHTML = WORLD.projects.map((p, i) => {
+    const age = simNow - S.lastVisit[p.id];
+    const tier = tierOf(age);
+    const fresh = Math.max(0.04, 1 - age/DAY);      // dial drains toward frozen
+    const from = prevFresh[p.id] !== undefined ? prevFresh[p.id] : fresh;
+    prevFresh[p.id] = fresh;
+    const C = 2*Math.PI*13;
+    const cur = STOPS[S.idx] === p.id;
+    return '<div class="dial t-' + tier + (cur ? " cur" : "") + '" data-i="' + i + '" title="' + esc(p.name) + ' — last visited ' + fmtAge(age) + ' ago (' + tier + ')">' +
+      '<span class="kn">' + (i+1) + '</span>' +
+      (S.unseen[p.id] > 0 ? '<span class="badge2">' + S.unseen[p.id] + '</span>' : "") +
+      '<svg width="34" height="34" viewBox="0 0 34 34">' +
+        '<circle class="ring-bg" cx="17" cy="17" r="13" stroke-width="3.5"/>' +
+        '<circle class="ring-fg" cx="17" cy="17" r="13" stroke-width="3.5" stroke="' + p.color + '"' +
+        ' stroke-dasharray="' + C.toFixed(1) + '" stroke-dashoffset="' + (C*(1-from)).toFixed(1) +
+        '" data-off="' + (C*(1-fresh)).toFixed(1) + '"/>' +
+      '</svg>' +
+      '<span class="info"><span class="nm">' + esc(p.name.split(" ")[0]) + '</span>' +
+      '<span class="agelbl">' + (age < 1 ? "here now" : fmtAge(age) + " · " + tier) + '</span></span></div>';
+  }).join("");
+  wrap.querySelectorAll(".dial").forEach(el =>
+    el.addEventListener("click", () => goTo(+el.dataset.i, "jump")));
+  requestAnimationFrame(() => wrap.querySelectorAll(".ring-fg").forEach(c => {
+    c.style.strokeDashoffset = c.dataset.off; // animated refill when a visit clears fog
+  }));
+}
+function renderIdleBtn(){
+  const n = idleAgents().length;
+  $("idleCount").textContent = n;
+  $("idleBtn").classList.toggle("zero", n === 0);
+}
+function renderHud(){ renderRing(); renderDots(); renderDials(); renderIdleBtn(); }
+setInterval(() => { if (S.pings.length) renderRing(); }, 1000);
+/* ================= stop cards ================= */
+function agentRow(p, a){
+  const why = a.state === "blocked" ? "waiting on gate-desync decision"
+    : a.state === "idle" ? "no runnable task" : "";
+  const act = a.state === "blocked" && a.blockedOn === "decision-gate-desync"
+    ? '<button class="tacts-open btn" style="padding:3px 9px;font-size:11px" data-act="opendec" data-dec="decision-gate-desync">open decision</button>' : "";
+  return '<div class="agent"><span class="st ' + a.state + '"></span>' +
+    '<span class="aname">' + a.name + '</span>' +
+    '<span class="atask">' + esc(a.task) + '</span>' +
+    (why ? '<span class="why">' + why + '</span>' : "") + act +
+    '<span class="ats">' + a.lastReport + '</span></div>';
+}
+function triageItem(it, proj){
+  const chip = it.assigned ? '<span class="chip">→ ' + esc(it.assigned) + '</span>' : "";
+  const acts = it.state === "open"
+    ? '<span class="tacts">' +
+      '<button data-act="assign" data-id="' + it.id + '" data-proj="' + proj + '" title="assign to an agent / project">assign</button>' +
+      '<button data-act="snooze" data-id="' + it.id + '" data-proj="' + proj + '" title="push to next patrol pass">snooze</button>' +
+      '<button data-act="done" data-id="' + it.id + '" data-proj="' + proj + '" title="mark handled">done</button></span>'
+    : '<span class="tacts"><button data-act="reopen" data-id="' + it.id + '" data-proj="' + proj + '">undo</button></span>';
+  return '<div class="titem k-' + it.kind + " " + (it.state !== "open" ? it.state : "") + '" id="ti-' + it.id + '">' +
+    '<span class="tts">' + it.ts + '</span>' +
+    '<span class="ttext">' + (it.agent ? '<b style="font-family:var(--mono);font-size:11px">' + it.agent + '</b> · ' : "") + esc(it.text) +
+    (it.state === "snoozed" ? ' <i style="color:var(--faint)">(snoozed → next pass)</i>' : "") + '</span>' + chip + acts + '</div>';
+}
+function nextActionsFor(p){
+  const acts = [];
+  if (p.id === "albion") {
+    if (S.decisions.find(d => d.id === "decision-gate-desync").state === "pending")
+      acts.push("Decide gate-desync fix — unblocks navigator (due today)");
+    else acts.push("navigator resumes cross-map routing with the committed fix");
+    acts.push("Kick off price feed refactor to wake market-bot");
+  }
+  if (p.id === "homelab") acts.push("Check volume 3/5 when infra-agent reports (~40m)", "Queue reverse-proxy + cert move next");
+  if (p.id === "paper") acts.push("Decide eval scope (full grid vs v2 delta) — due Aug 25", "Pull v2 numbers into eval section for advisor");
+  if (p.id === "apartment") acts.push("Book the Riverside visit", "Ask landlord about the garage option (see capture)");
+  return acts;
+}
+function projEventLog(pid){
+  return S.events.filter(e => e.proj === pid).slice().reverse().map(e =>
+    '<div class="rstep"><span class="rts">' + e.ts + '</span><span class="rt">' +
+    (e.agent ? '<b style="font-family:var(--mono);font-size:11px">' + e.agent + '</b> · ' : "") + esc(e.t) + '</span></div>').join("");
+}
+
+function renderCard(back){
+  const stage = $("stage");
+  const stop = STOPS[S.idx];
+  const dir = back ? " back" : "";
+  const nextStop = STOPS[(S.idx+1) % STOPS.length];
+  const nextName = nextStop === "queue" ? "Queue" : byId(nextStop).name;
+  const foot = '<div class="cardfoot"><span>stop ' + (S.idx+1) + '/5 · patrol in progress</span>' +
+    '<span class="nx"><b>Tab</b> / <b>.</b> → next: ' + esc(nextName) + '</span></div>';
+
+  if (stop === "queue") { stage.innerHTML = queueCard(dir) + ""; wireCard(); return; }
+
+  const p = byId(stop);
+  const snap = S.deltaSnap[stop];
+  const tier = snap.tier;
+  const dl = deltaLine(stop);
+  const items = S.triage[stop];
+  const openItems = items.filter(i => i.state === "open");
+  const showCold = (tier === "cold" || tier === "frozen") && !S.caughtUp[stop];
+
+  let h = '<article class="card' + (S.expanded ? " expanded" : "") + dir +
+    (showCold ? " fog-" + tier : (tier !== "warm" ? " fog-" + tier + " will-defrost" : "")) + '" id="cardEl">';
+  h += '<div class="cardhead"><div class="stopline">' +
+    '<span class="swatch" style="background:' + p.color + '"></span>' +
+    '<span>patrol stop ' + (S.idx+1) + '/5 · ' + p.status + '</span>' +
+    '<span class="age ' + tier + '">last visit ' + fmtAge(snap.age) + ' ago · ' + tier + '</span></div>' +
+    '<div class="cardtitle"><h1>' + esc(p.name) + '</h1><span class="goal">' + esc(p.goal) + '</span></div></div>';
+
+  h += '<div class="delta' + (dl.quiet ? " quiet" : "") + '"><span class="since">since you left ' +
+    fmtAge(snap.age) + '</span><span class="dtext">' + esc(dl.txt) + '</span></div>';
+
+  if (showCold)
+    h += '<div class="coldbar"><span class="msg">❄ ' + (tier === "frozen" ? "Frozen" : "Cold") +
+      ' context — ' + fmtAge(snap.age) + ' since your last pass. Rebuild before acting?</span>' +
+      '<button class="btn warn" data-act="replay" data-proj="' + stop + '">▸ Rebuild context (replay)</button></div>';
+
+  h += '<div class="cardbody">';
+  h += '<div class="sect"><h2>triage — new since last visit <span class="n">' + openItems.length + '</span></h2>' +
+    (items.length ? items.map(it => triageItem(it, stop)).join("") : '<div class="empty">nothing landed here while you were away.</div>') + '</div>';
+
+  if (p.agents.length)
+    h += '<div class="sect"><h2>agents <span class="n">' + p.agents.length + '</span></h2>' +
+      p.agents.map(a => agentRow(p, a)).join("") + '</div>';
+
+  const decs = pendingDecisions().filter(d => d.proj === stop);
+  if (decs.length)
+    h += '<div class="sect"><h2>pending decisions</h2>' + decs.map(d =>
+      '<div class="decrow" data-act="opendec" data-dec="' + d.id + '"><span class="pill pend">pending</span>' +
+      '<span class="dt">' + esc(d.title) + '</span><span class="due">due ' + d.due + '</span></div>').join("") + '</div>';
+
+  h += '<div class="sect"><h2>next actions</h2>' + nextActionsFor(p).map(a =>
+    '<div class="nextact">' + esc(a) + '</div>').join("") + '</div>';
+
+  h += '<div class="sect"><h2>tasks</h2>' + p.tasks.map(t =>
+    '<div class="taskrow' + (t.state === "done" ? " isdone" : "") + '"><span class="tk ' + t.state + '">' + t.state + '</span>' + esc(t.t) + '</div>').join("") + '</div>';
+
+  if (S.expanded)
+    h += '<div class="sect"><h2>full event log</h2>' + (projEventLog(stop) || '<div class="empty">no events logged.</div>') + '</div>';
+
+  h += '</div>' + foot + '</article>';
+  stage.innerHTML = h;
+  wireCard();
+  const ce = $("cardEl"); // animate the fog clearing on arrival
+  if (ce && ce.classList.contains("will-defrost"))
+    requestAnimationFrame(() => requestAnimationFrame(() => ce.classList.add("defrost")));
+}
+
+function queueCard(dir){
+  const caps = S.captures;
+  const openCaps = caps.filter(c => c.state === "open").length;
+  const snoozedElsewhere = [];
+  for (const pid of ["albion","homelab","paper","apartment"])
+    for (const it of S.triage[pid]) if (it.state === "snoozed") snoozedElsewhere.push({ it, pid });
+  let h = '<article class="card' + (S.expanded ? " expanded" : "") + dir + ' defrost" id="cardEl">';
+  h += '<div class="cardhead"><div class="stopline">' +
+    '<span class="swatch" style="background:var(--queue)"></span>' +
+    '<span>patrol stop 5/5 · end of loop</span><span class="age warm">the queue always rides last</span></div>' +
+    '<div class="cardtitle"><h1>Queue</h1><span class="goal">unclassified captures + decisions, swept at the end of every rotation</span></div></div>';
+  h += '<div class="delta"><span class="since">end of cycle</span><span class="dtext">' +
+    openCaps + ' unsorted capture' + (openCaps === 1 ? "" : "s") + ' · ' + pendingDecisions().length +
+    ' pending decision' + (pendingDecisions().length === 1 ? "" : "s") +
+    (snoozedElsewhere.length ? " · " + snoozedElsewhere.length + " snoozed item(s) resurfacing" : "") + '</span></div>';
+  h += '<div class="cardbody">';
+  h += '<div class="sect"><h2>decisions waiting on you <span class="n">' + pendingDecisions().length + '</span></h2>' +
+    S.decisions.map(d => d.state === "pending"
+      ? '<div class="decrow" data-act="opendec" data-dec="' + d.id + '"><span class="pill pend">pending</span><span class="dt">' + esc(d.title) + '</span><span class="due">due ' + d.due + '</span></div>'
+      : '<div class="decrow resolved"><span class="pill res">resolved</span><span class="dt">' + esc(d.title) + '</span><span class="due">✓ ' + esc(d.chosen || "") + '</span></div>').join("") + '</div>';
+  h += '<div class="sect"><h2>unsorted captures <span class="n">' + openCaps + '</span></h2>' +
+    (caps.length ? caps.map(c => triageItem(c, "queue")).join("") : '<div class="empty">capture stream is clear.</div>') +
+    '<div class="caphint">press <b style="color:var(--mint)">c</b> anywhere to add one — filing is optional, the patrol brings you back here.</div></div>';
+  if (snoozedElsewhere.length)
+    h += '<div class="sect"><h2>snoozed — resurfacing next pass</h2>' +
+      snoozedElsewhere.map(s => triageItem(s.it, s.pid)).join("") + '</div>';
+  h += '</div><div class="cardfoot"><span>stop 5/5 · cycle complete</span><span class="nx"><b>Tab</b> / <b>.</b> → restart patrol at Albion</span></div></article>';
+  return h;
+}
+
+/* triage + card action wiring */
+function wireCard(){
+  $("stage").querySelectorAll("[data-act]").forEach(el => {
+    el.addEventListener("click", ev => {
+      ev.stopPropagation();
+      const act = el.dataset.act;
+      if (act === "opendec") openDecision(el.dataset.dec);
+      else if (act === "replay") openReplay(el.dataset.proj);
+      else doTriage(act, el.dataset.id, el.dataset.proj);
+    });
+  });
+}
+function findItem(id, proj){
+  const list = proj === "queue" ? S.captures : S.triage[proj];
+  return list.find(i => i.id === id);
+}
+function doTriage(act, id, proj){
+  const it = findItem(id, proj);
+  if (!it) return;
+  if (act === "done") it.state = "done";
+  else if (act === "snooze") it.state = "snoozed";
+  else if (act === "reopen") { it.state = "open"; it.assigned = null; }
+  else if (act === "assign") {
+    const pool = proj === "queue" || !byId(proj) || !byId(proj).agents.length
+      ? ["albion","homelab","paper","apartment","you"]
+      : byId(proj).agents.map(a => a.name).concat("you");
+    const cur = pool.indexOf(it.assigned);
+    it.assigned = pool[(cur + 1) % pool.length]; // click again to cycle assignee
+  }
+  renderCard(); renderHud();
+  const el = document.getElementById("ti-" + id);
+  if (el) el.classList.add("fadeghost");
+}
+
+/* ================= navigation ================= */
+function enterStop(i){
+  const stop = STOPS[i];
+  if (stop !== "queue") {
+    const age = simNow - S.lastVisit[stop];
+    S.deltaSnap[stop] = { age, tier: tierOf(age), items: S.triage[stop].filter(x => x.state === "open") };
+    S.lastVisit[stop] = simNow;      // visit clears fog + since-counter
+    S.unseen[stop] = 0;
+    S.alerts = S.alerts.filter(a => a.proj !== stop);
+  }
+  S.visitedThisCycle.add(stop);
+  if (S.visitedThisCycle.size === STOPS.length && i === 0) S.visitedThisCycle = new Set([stop]);
+}
+function goTo(i, how){
+  const back = how === "back" || i < S.idx && how !== "advance";
+  if (how !== "back") S.crumb = null;
+  S.prevIdx = S.idx;
+  S.idx = ((i % STOPS.length) + STOPS.length) % STOPS.length;
+  S.expanded = (how === "expand");
+  enterStop(S.idx);
+  renderCard(back);
+  renderHud();
+  renderCrumb();
+}
+function advance(dir){ goTo(S.idx + dir, dir > 0 ? "advance" : "back"); }
+function renderCrumb(){
+  const c = $("crumb");
+  if (S.crumb === null) { c.classList.add("hidden"); return; }
+  const from = STOPS[S.crumb] === "queue" ? "Queue" : byId(STOPS[S.crumb]).name;
+  c.innerHTML = '⤴ jumped from <b>' + esc(from) + '</b> — <span class="k">Esc</span> to go back';
+  c.classList.remove("hidden");
+}
+/* ================= overlays ================= */
+let ovlEl = null, replayTimer = null;
+function openOvl(html){
+  closeOvl();
+  ovlEl = document.createElement("div");
+  ovlEl.id = "ovl";
+  ovlEl.innerHTML = html;
+  document.body.appendChild(ovlEl);
+  ovlEl.addEventListener("mousedown", e => { if (e.target === ovlEl) closeOvl(); });
+  const x = ovlEl.querySelector(".x");
+  if (x) x.addEventListener("click", closeOvl);
+}
+function closeOvl(){
+  if (replayTimer) { clearInterval(replayTimer); replayTimer = null; }
+  if (ovlEl) { ovlEl.remove(); ovlEl = null; }
+}
+
+/* ---- quick capture ---- */
+function openCapture(){
+  openOvl('<div class="panel" style="width:min(560px,93vw)">' +
+    '<div class="phead"><span class="sub">quick capture</span><h2>Catch a thought</h2><button class="x">✕</button></div>' +
+    '<div class="pbody"><input id="capInput" placeholder="type it — no filing needed, the patrol brings it back around…" autocomplete="off">' +
+    '<div class="caphint">lands unclassified in the <b>Queue</b> stop (end of every rotation). <b>Enter</b> to save · <b>Esc</b> to cancel.</div></div>' +
+    '<div class="pfoot"><span class="note">unsorted by design</span><button class="btn" id="capCancel">Cancel</button>' +
+    '<button class="btn primary" id="capSave">Capture ⏎</button></div></div>');
+  const inp = $("capInput");
+  inp.focus();
+  const save = () => {
+    const v = inp.value.trim();
+    if (!v) { closeOvl(); return; }
+    const ts = fmtClock(simNow);
+    S.captures.unshift({ id: "cap" + Date.now(), ts, text: v, kind: "capture", state: "open", assigned: null });
+    S.events.push({ ts, proj: null, kind: "capture", t: v });
+    S.pings.push({ proj: "queue", born: Date.now() });
+    closeOvl();
+    toast("ok", "captured", v, "queued at the end of the patrol loop");
+    if (STOPS[S.idx] === "queue") renderCard();
+    renderHud();
+  };
+  inp.addEventListener("keydown", e => {
+    if (e.key === "Enter") save();
+    if (e.key === "Escape") { closeOvl(); e.stopPropagation(); }
+    e.stopPropagation();
+  });
+  $("capSave").addEventListener("click", save);
+  $("capCancel").addEventListener("click", closeOvl);
+}
+function fmtClock(mins){
+  const m = mins % DAY, h = Math.floor(m/60);
+  return (h<10?"0":"") + h + ":" + (m%60<10?"0":"") + (m%60);
+}
+
+/* ---- timeline replay (deep recovery for cold stops + decision re-read) ---- */
+function replaySteps(proj){
+  const p = byId(proj);
+  const steps = [{ ts: "goal", t: p.goal, insight: true }];
+  for (const e of S.events.filter(e => e.proj === proj))
+    steps.push({ ts: e.ts, t: (e.agent ? e.agent + ": " : "") + e.t });
+  if (proj === "paper") {
+    steps.push({ ts: "Aug 21", t: "v2 dataset eval rerun started — still the doing task" });
+    steps.push({ ts: "state", t: "blocked: advisor comments unaddressed until eval scope is decided (due Aug 25)", insight: true });
+  }
+  if (proj === "apartment") {
+    steps.push({ ts: "Aug 19", t: "shortlisted the Riverside 2br; visit still unbooked" });
+    steps.push({ ts: "yesterday", t: "capture: landlord mentioned garage option?? follow up" });
+    steps.push({ ts: "state", t: "2 open tasks, no agents on this — it only moves when you touch it", insight: true });
+  }
+  for (const t of p.tasks) steps.push({ ts: "task", t: t.t + " — " + t.state });
+  return steps;
+}
+function openReplay(proj){
+  const p = byId(proj);
+  const steps = replaySteps(proj);
+  runReplay({
+    sub: "timeline replay · deep recovery",
+    title: "Rebuild: " + p.name,
+    steps,
+    footNote: "replaying " + steps.length + " moments, oldest first",
+    doneLabel: "✓ Mark caught up",
+    onDone: () => {
+      S.caughtUp[proj] = true;
+      closeOvl();
+      toast("ok", "context rebuilt", p.name + " is warm again — fog cleared.", null);
+      renderCard(); renderHud();
+    }
+  });
+}
+function runReplay(cfg){
+  let shown = 0;
+  openOvl('<div class="panel"><div class="phead"><span class="sub">' + cfg.sub + '</span>' +
+    '<h2>' + esc(cfg.title) + '</h2><button class="x">✕</button></div>' +
+    '<div class="pbody" id="rBody"></div>' +
+    '<div class="pfoot"><span class="note rprog" id="rProg"></span>' +
+    (cfg.extraFoot || "") +
+    '<button class="btn" id="rStep">▸ step</button><button class="btn" id="rPlay">▶▶ play</button>' +
+    '<button class="btn primary" id="rDone" disabled style="opacity:.4">' + cfg.doneLabel + '</button></div></div>');
+  const body = $("rBody"), prog = $("rProg"), done = $("rDone");
+  function step(){
+    if (shown >= cfg.steps.length) return false;
+    const s = cfg.steps[shown];
+    body.querySelectorAll(".rstep").forEach(el => el.classList.remove("latest"));
+    body.insertAdjacentHTML("beforeend",
+      '<div class="rstep latest' + (s.insight ? " insight" : "") + '"><span class="rts">' + esc(s.ts) + '</span>' +
+      '<span class="rt">' + esc(s.t) + '</span></div>');
+    body.scrollTop = body.scrollHeight;
+    shown++;
+    prog.textContent = shown + " / " + cfg.steps.length;
+    if (shown >= cfg.steps.length) {
+      done.disabled = false; done.style.opacity = "1";
+      if (replayTimer) { clearInterval(replayTimer); replayTimer = null; $("rPlay").textContent = "▶▶ play"; }
+      if (cfg.onAllShown) cfg.onAllShown();
+    }
+    return true;
+  }
+  $("rStep").addEventListener("click", step);
+  $("rPlay").addEventListener("click", () => {
+    if (replayTimer) { clearInterval(replayTimer); replayTimer = null; $("rPlay").textContent = "▶▶ play"; return; }
+    $("rPlay").textContent = "❚❚ pause";
+    replayTimer = setInterval(() => { if (!step()) { clearInterval(replayTimer); replayTimer = null; } }, 650);
+  });
+  done.addEventListener("click", () => { if (!done.disabled) cfg.onDone(); });
+  step(); // reveal the first moment immediately
+}
+
+/* ---- decision flow (re-orientation + commit) ---- */
+function openDecision(decId){
+  const d = S.decisions.find(x => x.id === decId);
+  if (!d || d.state !== "pending") return;
+  const steps = decId === "decision-gate-desync"
+    ? WORLD.decisionContext.map(s => ({ ts: s.ts, t: s.t, insight: /key insight|conclusion/.test(s.t) }))
+    : [{ ts: "Aug 20 10:03", t: "advisor replied: eval section needs v2 dataset numbers" },
+       { ts: "Aug 21", t: "v2 rerun in progress; full grid would burn 2 days of compute before the Sep 5 deadline" },
+       { ts: "tension", t: "full grid = strongest claim, v2 delta = 4h but weaker claim", insight: true }];
+  runReplay({
+    sub: "decision · replay the accumulated context",
+    title: d.title,
+    steps,
+    doneLabel: "context read ✓",
+    onAllShown: () => {
+      const body = $("rBody");
+      body.insertAdjacentHTML("beforeend",
+        '<div style="margin-top:14px"><div style="font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--amber);margin-bottom:8px">— commit —</div>' +
+        d.options.map((o, i) => {
+          const name = o.split(":")[0];
+          return '<button class="optbtn" data-opt="' + i + '"><span class="ok">choose ' + esc(name) + '</span>' + esc(o) + '</button>';
+        }).join("") + '</div>');
+      body.scrollTop = body.scrollHeight;
+      body.querySelectorAll(".optbtn").forEach(b =>
+        b.addEventListener("click", () => commitDecision(d, +b.dataset.opt)));
+      $("rDone").textContent = "still thinking — close";
+    },
+    onDone: closeOvl
+  });
+}
+function commitDecision(d, optIdx){
+  d.state = "resolved";
+  d.chosen = d.options[optIdx].split(":")[0];
+  const ts = fmtClock(simNow);
+  S.events.push({ ts, proj: d.proj, kind: "decision", t: "DECIDED: " + d.title + " → " + d.chosen });
+  if (d.id === "decision-gate-desync") {
+    const alb = byId("albion");
+    const nav = alb.agents.find(a => a.id === "navigator");
+    nav.state = "working";
+    delete nav.blockedOn;
+    nav.task = "Routing through gates via " + d.chosen.toLowerCase() + " strategy";
+    nav.lastReport = ts;
+    alb.tasks.find(t => t.t === "Fix gate desync").state = "doing";
+    const bi = S.triage.albion.find(i => i.id === "a1");
+    if (bi && bi.state === "open") bi.state = "done";
+    S.events.push({ ts, proj: "albion", agent: "navigator", kind: "status", t: "Unblocked — resuming cross-map routing (" + d.chosen + ")" });
+    toast("ok", "decision committed", d.chosen + " chosen — navigator unblocked, idle/blocked count is now " + idleAgents().length + ".", null);
+  } else {
+    toast("ok", "decision committed", d.title + " → " + d.chosen, null);
+  }
+  closeOvl();
+  renderCard(); renderHud();
+}
+
+/* ---- idle/blocked agent cycling (SC2 idle-worker button) ---- */
+function cycleIdle(){
+  const list = idleAgents();
+  if (!list.length) { toast("ok", "no idle agents", "Every agent has runnable work. Patrol on.", null); return; }
+  S.idleIdx = (S.idleIdx + 1) % list.length;
+  const { p, a } = list[S.idleIdx];
+  const why = a.state === "blocked"
+    ? "Blocked on the gate-desync decision — it cannot route until you choose a fix."
+    : "Idle: its task is gated on the price feed refactor, which nobody has started.";
+  const sug = a.state === "blocked"
+    ? "Open the gate-desync decision and commit a fix."
+    : "Kick off the price feed refactor task (or reassign market-bot).";
+  openOvl('<div class="panel" style="width:min(520px,93vw)">' +
+    '<div class="phead"><span class="sub">idle / blocked · ' + (S.idleIdx+1) + " of " + list.length + '</span>' +
+    '<h2>Stuck agents</h2><button class="x">✕</button></div>' +
+    '<div class="pbody"><div class="idlecard">' +
+    '<div class="top"><span class="st ' + a.state + '" style="width:9px;height:9px;border-radius:50%"></span>' +
+    '<span class="aname">' + a.name + '</span><span class="pill ' + (a.state === "blocked" ? "pend" : "res") + '" style="background:#1a2422;color:var(--dim)">' + a.state + '</span>' +
+    '<span class="proj" style="margin-left:auto;color:' + p.color + '">' + esc(p.name) + '</span></div>' +
+    '<div class="why">' + esc(why) + '</div>' +
+    '<div class="sug"><b>suggested</b><span>' + esc(sug) + '</span></div></div></div>' +
+    '<div class="pfoot"><span class="note">last report ' + a.lastReport + '</span>' +
+    '<button class="btn" id="idleGo">go to ' + esc(p.name.split(" ")[0]) + '</button>' +
+    (a.state === "blocked" ? '<button class="btn warn" id="idleDec">open decision</button>' : "") +
+    '<button class="btn primary" id="idleNext">next stuck agent ▸</button></div></div>');
+  $("idleNext").addEventListener("click", cycleIdle);
+  $("idleGo").addEventListener("click", () => { closeOvl(); goTo(STOPS.indexOf(p.id), "jump"); });
+  const decBtn = $("idleDec");
+  if (decBtn) decBtn.addEventListener("click", () => openDecision(a.blockedOn));
+}
+
+/* ================= alerts: toast + ping + badge (non-modal) ================= */
+function toast(kind, head, body, offer){
+  const el = document.createElement("div");
+  el.className = "toast" + (kind === "ok" ? " ok" : "");
+  el.innerHTML = '<div class="th"><span>' + esc(head) + '</span><span class="sp">' + fmtClock(simNow) + '</span></div>' +
+    '<div class="tb">' + esc(body) + '</div>' +
+    (offer ? '<div class="off">' + offer + '</div>' : "");
+  $("toasts").appendChild(el);
+  el.addEventListener("click", () => { el.remove(); if (kind === "report") jumpToAlert(); });
+  setTimeout(() => el.classList.add("gone"), 6500);
+  setTimeout(() => el.remove(), 7300);
+}
+let extraRuns = 4;
+function simulateReport(){
+  simNow += 1; // 14:31, then +1 per extra run
+  let ev;
+  if (!S.reportFired) {
+    S.reportFired = true;
+    ev = Object.assign({}, WORLD.incomingReport);
+  } else {
+    extraRuns++;
+    ev = { ts: fmtClock(simNow), proj: "albion", agent: "packet-tracer", kind: "status",
+      t: "Gate-probe run #" + extraRuns + " complete: server pos unchanged after 3 moves — desync confirmed at handshake layer" };
+  }
+  ev.ts = fmtClock(simNow);
+  S.events.push(ev);
+  S.triage.albion.push({ id: "rt" + Date.now(), ts: ev.ts, kind: "status", agent: ev.agent, text: ev.t.replace(/^Gate-probe /, "gate-probe "), state: "open", assigned: null });
+  const onAlbion = STOPS[S.idx] === "albion";
+  if (!onAlbion) {                     // report to a non-focused project bumps its counter
+    S.unseen.albion += 1;
+    S.alerts.push({ proj: "albion", text: ev.t });
+  }
+  S.pings.push({ proj: "albion", born: Date.now() });   // ping on the glance surface
+  toast("report", "packet-tracer · albion", ev.t,
+    'ping on ring · view untouched — <kbd>Space</kbd> jumps there, <kbd>Esc</kbd> comes back');
+  renderHud();                          // badge + ping only; the main view NEVER changes
+  if (onAlbion) renderCard();           // already there: the item simply appends in place
+}
+function jumpToAlert(){
+  if (!S.alerts.length) { toast("ok", "no unseen alerts", "Nothing waiting — the patrol rhythm holds.", null); return; }
+  const a = S.alerts[S.alerts.length - 1]; // most recent unseen
+  const from = S.idx;
+  goTo(STOPS.indexOf(a.proj), "jump");
+  S.crumb = from;                        // camera-back breadcrumb
+  renderCrumb();
+}
+
+/* ================= keyboard ================= */
+document.addEventListener("keydown", e => {
+  const inInput = /INPUT|TEXTAREA/.test(document.activeElement.tagName);
+  if (e.key === "Escape") {
+    e.preventDefault();
+    if (ovlEl) { closeOvl(); return; }
+    if (S.crumb !== null) { const c = S.crumb; S.crumb = null; goTo(c, "back"); return; }
+    if (S.expanded) { S.expanded = false; renderCard(); }
+    return;
+  }
+  if (inInput) return;
+  if (e.key === "Tab") { e.preventDefault(); if (!ovlEl) advance(e.shiftKey ? -1 : 1); return; }
+  if (ovlEl) return;
+  if (e.key === ".") { e.preventDefault(); advance(1); return; }
+  if (e.key === ",") { e.preventDefault(); advance(-1); return; }
+  if (e.key === " ") { e.preventDefault(); jumpToAlert(); return; }
+  if (e.key === "0") { e.preventDefault(); if (S.crumb !== null) { const c = S.crumb; S.crumb = null; goTo(c, "back"); } return; }
+  if (e.key >= "1" && e.key <= "4") {
+    e.preventDefault();
+    const i = +e.key - 1;
+    const now = Date.now();
+    const dbl = S.keyLast.k === e.key && now - S.keyLast.t < 450;
+    S.keyLast = { k: e.key, t: now };
+    if (dbl) { goTo(i, S.expanded && S.idx === i ? "jump" : "expand"); } // double-press = expand/center
+    else goTo(i, "jump");
+    return;
+  }
+  if (e.key === "5" || e.key === "q") { e.preventDefault(); goTo(4, "jump"); return; }
+  if (e.key === "c") { e.preventDefault(); openCapture(); return; }
+  if (e.key === "i") { e.preventDefault(); cycleIdle(); return; }
+});
+
+/* ================= chrome ================= */
+function toggleDrop(btn, panel, other, otherBtn){
+  const open = panel.classList.contains("hidden");
+  panel.classList.toggle("hidden", !open);
+  btn.classList.toggle("on", open);
+  other.classList.add("hidden"); otherBtn.classList.remove("on");
+}
+$("wfBtn").addEventListener("click", () => toggleDrop($("wfBtn"), $("wfPanel"), $("cmpPanel"), $("cmpBtn")));
+$("cmpBtn").addEventListener("click", () => toggleDrop($("cmpBtn"), $("cmpPanel"), $("wfPanel"), $("wfBtn")));
+$("simBtn").addEventListener("click", simulateReport);
+$("capBtn").addEventListener("click", openCapture);
+$("idleBtn").addEventListener("click", cycleIdle);
+
+/* ================= boot ================= */
+enterStop(0);
+renderCard();
+renderHud();
+setTimeout(() => { if (!S.reportFired) simulateReport(); }, 8000); // one-shot auto-fire
+</script>
+</body>
+</html>

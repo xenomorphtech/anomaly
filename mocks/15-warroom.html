@@ -1,0 +1,1221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>War Room — context command center</title>
+<style>
+/* ============ WAR ROOM — cool steel command-center identity ============ */
+:root{
+  --bg:#0a0d12; --bg2:#0d1118; --panel:#10151d; --panel2:#131a24; --panel3:#182130;
+  --line:#1d2634; --line2:#273245; --ink:#c7d3e4; --ink-dim:#7d8ea6; --ink-faint:#51637d;
+  --hdr:#5f7391; --steel:#8fa8c8; --sel:#16202e;
+  --ok:#7fc98a; --warn:#e0a458; --bad:#e06c6c; --info:#6fb3d2; --purple:#b58ee0;
+  --mono:ui-monospace,'SF Mono','Cascadia Mono',Menlo,Consolas,monospace;
+  --sans:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{height:100%}
+body{background:var(--bg);color:var(--ink);font:13px/1.45 var(--sans);overflow:hidden;
+  display:flex;flex-direction:column}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-thumb{background:#243247;border-radius:5px;border:2px solid var(--bg)}
+::-webkit-scrollbar-track{background:transparent}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+.sc{text-transform:uppercase;letter-spacing:.14em;font-size:10px;font-weight:600;color:var(--hdr)}
+.mono{font-family:var(--mono)}
+kbd{font-family:var(--mono);font-size:10px;background:#1a2433;border:1px solid #2c3a52;
+  border-bottom-width:2px;border-radius:3px;padding:0 4px;color:var(--steel)}
+
+/* ============ top bar ============ */
+#topbar{flex:0 0 44px;display:flex;align-items:center;gap:14px;padding:0 14px;
+  background:linear-gradient(180deg,#121926,#0e141d);border-bottom:1px solid var(--line2);z-index:40}
+#badge{display:flex;align-items:baseline;gap:10px;white-space:nowrap}
+#badge .name{font-family:var(--mono);font-size:15px;font-weight:700;letter-spacing:.22em;color:#dce6f4}
+#badge .name b{color:var(--warn)}
+#badge .fuse{font-size:11px;color:var(--ink-faint)}
+#topstats{display:flex;gap:14px;margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--ink-dim);white-space:nowrap}
+#topstats b{color:var(--steel)}
+.tbtn{padding:5px 10px;border:1px solid var(--line2);border-radius:4px;font-size:11px;
+  color:var(--ink-dim);background:#131b28;white-space:nowrap;transition:all .15s}
+.tbtn:hover{color:var(--ink);border-color:#3a4c69;background:#182338}
+.tbtn.primary{color:#0b0e13;background:var(--warn);border-color:var(--warn);font-weight:600}
+.tbtn.primary:hover{background:#eab470}
+#topbar a{color:var(--ink-faint);font-size:11px;text-decoration:none;white-space:nowrap}
+#topbar a:hover{color:var(--steel);text-decoration:underline}
+
+/* ============ overlay panels (workflows / compare) — non-modal, dismissible ============ */
+.floatpanel{position:fixed;top:52px;right:12px;width:400px;max-height:70vh;overflow:auto;z-index:60;
+  background:var(--panel2);border:1px solid var(--line2);border-radius:6px;padding:14px 16px;
+  box-shadow:0 12px 40px rgba(0,0,0,.6);display:none}
+.floatpanel.open{display:block;animation:drop .18s ease-out}
+@keyframes drop{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
+.floatpanel h3{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--steel);margin-bottom:10px}
+.floatpanel ol{margin:0 0 4px 18px}
+.floatpanel li{margin-bottom:8px;font-size:12px;color:var(--ink-dim)}
+.floatpanel li b{color:var(--ink)}
+.floatpanel .swcol{margin-bottom:10px}
+.floatpanel .swcol h4{font-size:10px;letter-spacing:.12em;text-transform:uppercase;margin-bottom:5px}
+.floatpanel .swcol.s h4{color:var(--ok)} .floatpanel .swcol.w h4{color:var(--bad)}
+.floatpanel .swcol ul{margin-left:16px}
+.floatpanel .swcol li{margin-bottom:4px}
+
+/* ============ main 3-column grid ============ */
+#grid{flex:1;display:grid;grid-template-columns:336px minmax(0,1fr) 302px;min-height:0;
+  transition:grid-template-columns .25s ease}
+body.focusmode #grid{grid-template-columns:0px minmax(0,1fr) 0px}
+body.focusmode #triage,body.focusmode #production{opacity:0;pointer-events:none;overflow:hidden}
+#triage,#production{transition:opacity .2s}
+.pane{min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--panel)}
+#triage{border-right:1px solid var(--line2)}
+#production{border-left:1px solid var(--line2)}
+.panehead{flex:0 0 30px;display:flex;align-items:center;gap:8px;padding:0 12px;
+  background:var(--bg2);border-bottom:1px solid var(--line)}
+.panehead .cnt{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--ink-faint)}
+
+/* ============ LEFT: triage queue ============ */
+#capbox{flex:0 0 auto;padding:8px 10px;border-bottom:1px solid var(--line)}
+#capinput{width:100%;background:#0c1119;border:1px solid var(--line2);border-radius:4px;
+  color:var(--ink);font:12px var(--sans);padding:7px 9px;outline:none;transition:border-color .15s}
+#capinput:focus{border-color:var(--warn);box-shadow:0 0 0 1px rgba(224,164,88,.25)}
+#capinput::placeholder{color:var(--ink-faint)}
+#queue{flex:1;overflow-y:auto;padding:4px 0}
+.qitem{position:relative;padding:7px 10px 7px 14px;border-bottom:1px solid #141b26;cursor:pointer;
+  border-left:2px solid transparent;transition:background .12s}
+.qitem:hover{background:#121926}
+.qitem.sel{background:var(--sel);border-left-color:var(--steel)}
+.qitem.snoozed{opacity:.45}
+.qitem.landed{animation:land .5s ease-out}
+@keyframes land{0%{background:#2a3a26;transform:translateX(-6px)}100%{background:transparent;transform:none}}
+.qitem.leaving{opacity:0;transform:translateX(-16px);transition:all .18s}
+.qtop{display:flex;align-items:center;gap:6px;margin-bottom:2px}
+.qkind{font-family:var(--mono);font-size:9px;letter-spacing:.08em;padding:1px 5px;border-radius:3px;font-weight:700}
+.qkind.k-status{color:var(--info);background:rgba(111,179,210,.12)}
+.qkind.k-blocked{color:var(--bad);background:rgba(224,108,108,.14)}
+.qkind.k-decision{color:var(--warn);background:rgba(224,164,88,.14)}
+.qkind.k-capture{color:var(--ink-dim);background:rgba(125,142,166,.12)}
+.qkind.k-note{color:var(--purple);background:rgba(181,142,224,.12)}
+.qproj{display:inline-flex;align-items:center;gap:4px;font-size:10px;color:var(--ink-dim)}
+.qproj .dot{width:6px;height:6px;border-radius:2px;display:inline-block}
+.qts{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--ink-faint)}
+.qtext{font-size:12px;color:var(--ink);line-height:1.35}
+.qitem .unseen-dot{position:absolute;left:4px;top:11px;width:5px;height:5px;border-radius:50%;background:var(--warn)}
+.qacts{display:none;gap:5px;margin-top:6px}
+.qitem.sel .qacts,.qitem:hover .qacts{display:flex}
+.qbtn{font-size:10px;font-family:var(--mono);padding:2px 8px;border:1px solid var(--line2);border-radius:3px;
+  color:var(--ink-dim);background:#111927}
+.qbtn:hover{color:var(--ink);border-color:#3a4c69}
+.qbtn u{text-decoration:none;color:var(--steel)}
+.qfile{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}
+.qfile .fbtn{font-size:10px;padding:2px 7px;border-radius:3px;border:1px solid var(--line2);color:var(--ink-dim)}
+.qfile .fbtn:hover{color:var(--ink)}
+.qempty{padding:26px 14px;text-align:center;color:var(--ink-faint);font-size:12px}
+
+/* ============ CENTER: state of the world ============ */
+#center{position:relative;background:var(--bg2)}
+#centerscroll{flex:1;overflow-y:auto;padding:16px 22px 30px}
+#cenhead{display:flex;align-items:center;gap:10px;margin-bottom:4px}
+#cenhead .pdot{width:10px;height:10px;border-radius:3px}
+#cenhead h1{font-size:17px;font-weight:650;letter-spacing:.02em;color:#e3ebf6}
+.statuschip{font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;
+  padding:2px 7px;border-radius:3px;border:1px solid var(--line2);color:var(--ink-dim)}
+.statuschip.active{color:var(--ok);border-color:rgba(127,201,138,.4)}
+.statuschip.deadline{color:var(--bad);border-color:rgba(224,108,108,.4)}
+.statuschip.background{color:var(--ink-faint)}
+#cengoal{font-size:12px;color:var(--ink-dim);margin-bottom:12px}
+/* delta-first resume header */
+#resume{border:1px solid var(--line2);border-left:3px solid var(--steel);border-radius:4px;
+  background:linear-gradient(180deg,#141c29,#111826);padding:9px 13px;margin-bottom:16px;animation:drop .25s ease-out}
+#resume.cold{border-left-color:var(--purple)} #resume.frozen{border-left-color:var(--ink-faint)}
+#resume .rh{display:flex;align-items:baseline;gap:8px}
+#resume .rh .sc{color:var(--steel)}
+#resume .age{font-family:var(--mono);font-size:10px;color:var(--warn)}
+#resume ul{margin:6px 0 0 16px}
+#resume li{font-size:12px;color:var(--ink);margin-bottom:2px}
+#resume .cur{font-size:12px;color:var(--ok);margin-top:2px}
+#resume .recover{margin-top:8px}
+.recoverbtn{font-family:var(--mono);font-size:11px;color:var(--purple);border:1px solid rgba(181,142,224,.45);
+  border-radius:4px;padding:4px 10px;background:rgba(181,142,224,.07)}
+.recoverbtn:hover{background:rgba(181,142,224,.16)}
+.secttl{margin:18px 0 8px;display:flex;align-items:center;gap:8px}
+.secttl:after{content:"";flex:1;height:1px;background:var(--line)}
+#brieftext{font-size:13px;line-height:1.6;color:#b9c6d9;max-width:70ch}
+#brieftext .hl{color:var(--warn)}
+#brieftext .hlr{color:var(--bad)}
+/* tasks table */
+table.tasks{border-collapse:collapse;width:100%;max-width:560px;font-size:12px}
+table.tasks td{padding:5px 10px;border-bottom:1px solid #151d2a}
+table.tasks td:first-child{width:74px}
+.tstate{font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;padding:1px 6px;border-radius:3px}
+.tstate.done{color:var(--ok);background:rgba(127,201,138,.1)}
+.tstate.doing{color:var(--info);background:rgba(111,179,210,.12)}
+.tstate.todo{color:var(--ink-dim);background:rgba(125,142,166,.1)}
+.tstate.blocked{color:var(--bad);background:rgba(224,108,108,.14)}
+/* append-only diff log */
+#log{font-family:var(--mono);font-size:11.5px;max-width:70ch}
+.logline{display:flex;gap:8px;padding:3px 8px;border-radius:3px;border-left:2px solid transparent}
+.logline .g{width:12px;flex:0 0 12px;text-align:center;font-weight:700}
+.logline .lts{color:var(--ink-faint);flex:0 0 84px}
+.logline .lag{color:var(--steel)}
+.logline .lt{color:#aebbce;white-space:pre-wrap}
+.logline.add .g{color:var(--ok)} .logline.add{background:rgba(127,201,138,.05)}
+.logline.add .lt{color:#bfe0c5}
+.logline.blk .g{color:var(--bad)} .logline.blk{background:rgba(224,108,108,.06)}
+.logline.blk .lt{color:#e6b3b3}
+.logline.chg .g{color:var(--warn)} .logline.chg{background:rgba(224,164,88,.06)}
+.logline.chg .lt{color:#ecd2ac}
+.logline.note .g{color:var(--ink-faint)}
+.logline.flash{animation:lflash 1.6s ease-out}
+@keyframes lflash{0%{background:rgba(224,164,88,.28)}100%{background:transparent}}
+/* fog veil over center for cold projects, animates clear */
+#fogveil{position:absolute;inset:0;pointer-events:none;z-index:5;opacity:0;
+  background:repeating-linear-gradient(-45deg,rgba(13,17,24,.85) 0 14px,rgba(20,26,37,.85) 14px 28px);
+  backdrop-filter:saturate(.3)}
+#fogveil.clearing{opacity:1;animation:fogout 1s ease-out forwards}
+@keyframes fogout{0%{opacity:1}100%{opacity:0}}
+#fogveil .ftag{position:absolute;top:34%;left:50%;transform:translateX(-50%);
+  font-family:var(--mono);font-size:11px;letter-spacing:.2em;color:var(--steel)}
+/* decision dossier + recovery views (in-center, never modal) */
+.viewback{font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-bottom:10px}
+.viewback:hover{color:var(--steel)}
+.dochead{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.dochead h2{font-size:16px;color:#e8dfc9;font-weight:650}
+.docmeta{font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-bottom:14px}
+.ctxline{display:flex;gap:12px;padding:6px 10px;border-left:2px solid var(--line2);margin-left:4px;font-size:12px}
+.ctxline .cts{font-family:var(--mono);font-size:10px;color:var(--ink-faint);flex:0 0 96px;padding-top:1px}
+.ctxline .ct{color:#b9c6d9;max-width:62ch}
+.ctxline.key{border-left-color:var(--warn)} .ctxline.key .ct{color:#ecd2ac}
+.optrow{display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:720px;margin-top:12px}
+.optcard{border:1px solid var(--line2);border-radius:6px;background:var(--panel2);padding:12px 14px;
+  transition:border-color .15s}
+.optcard:hover{border-color:#3a4c69}
+.optcard h4{font-size:12px;color:var(--ink);margin-bottom:4px}
+.optcard p{font-size:11px;color:var(--ink-dim);margin-bottom:10px;line-height:1.45}
+.commitbtn{width:100%;font-family:var(--mono);font-size:11px;letter-spacing:.06em;padding:6px 0;
+  border-radius:4px;border:1px solid rgba(224,164,88,.5);color:var(--warn);background:rgba(224,164,88,.08)}
+.commitbtn:hover{background:rgba(224,164,88,.2)}
+.resolvedbanner{border:1px solid rgba(127,201,138,.4);border-radius:5px;background:rgba(127,201,138,.07);
+  padding:10px 14px;font-size:12px;color:var(--ok);margin-top:12px;animation:drop .3s}
+.recv h2{font-size:15px;color:#d9cdea;font-weight:650}
+.recvsec{margin:14px 0}
+.recvsec .body{font-size:12.5px;color:#b9c6d9;line-height:1.55;max-width:66ch}
+.caughtup{font-family:var(--mono);font-size:11px;padding:6px 14px;border-radius:4px;
+  border:1px solid rgba(127,201,138,.5);color:var(--ok);background:rgba(127,201,138,.08);margin-top:8px}
+.caughtup:hover{background:rgba(127,201,138,.18)}
+
+/* ============ RIGHT: production bar ============ */
+#idlewrap{padding:8px 10px;border-bottom:1px solid var(--line)}
+#idlebtn{width:100%;display:flex;align-items:center;gap:8px;padding:8px 11px;border-radius:5px;
+  border:1px solid rgba(224,164,88,.45);background:rgba(224,164,88,.08);transition:all .15s}
+#idlebtn:hover{background:rgba(224,164,88,.18)}
+#idlebtn .ic{font-size:14px;color:var(--warn)}
+#idlebtn .lbl{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--warn);font-weight:600}
+#idlebtn .num{margin-left:auto;font-family:var(--mono);font-size:15px;font-weight:700;color:var(--warn)}
+#idlebtn.zero{border-color:var(--line2);background:#121926}
+#idlebtn.zero .ic,#idlebtn.zero .lbl,#idlebtn.zero .num{color:var(--ink-faint)}
+#slots{flex:1;overflow-y:auto;padding:6px 0}
+.slotgroup{margin-bottom:2px}
+.slotgroup .gh{display:flex;align-items:center;gap:6px;padding:6px 12px 3px}
+.slotgroup .gh .dot{width:7px;height:7px;border-radius:2px}
+.slotgroup .gh .gn{font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-dim);font-weight:600}
+.slot{position:relative;margin:0 8px 6px;border:1px solid var(--line);border-radius:5px;background:var(--panel2);
+  padding:7px 9px 7px 12px;cursor:pointer;transition:all .15s;overflow:hidden}
+.slot:before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--pc,#555)}
+.slot:hover{border-color:#33425c}
+.slot.cycling{border-color:var(--warn);box-shadow:0 0 0 1px rgba(224,164,88,.4);animation:drop .2s}
+.slot.justchanged{animation:slotflash 1.4s ease-out}
+@keyframes slotflash{0%{background:rgba(127,201,138,.22)}100%{background:var(--panel2)}}
+.slot .r1{display:flex;align-items:center;gap:7px}
+.slot .aname{font-family:var(--mono);font-size:11.5px;color:var(--ink);font-weight:600}
+.sstate{margin-left:auto;font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;
+  padding:1px 6px;border-radius:3px}
+.sstate.working{color:var(--ok);background:rgba(127,201,138,.1)}
+.sstate.working:before{content:"▸ "}
+.sstate.blocked{color:var(--bad);background:rgba(224,108,108,.14)}
+.sstate.blocked:before{content:"⛔ "}
+.sstate.idle{color:var(--warn);background:rgba(224,164,88,.12)}
+.sstate.idle:before{content:"◌ "}
+.slot .task{font-size:11px;color:var(--ink-dim);margin-top:3px;line-height:1.35}
+.slot .r3{display:flex;gap:10px;margin-top:4px;font-family:var(--mono);font-size:9.5px;color:var(--ink-faint)}
+.slot .r3 .eta b{color:var(--info);font-weight:600}
+.slot .prog{height:2px;background:#1a2432;border-radius:2px;margin-top:5px;overflow:hidden}
+.slot .prog i{display:block;height:100%;background:var(--info);border-radius:2px}
+.idlecard{margin:-2px 8px 8px;border:1px solid rgba(224,164,88,.4);border-top:none;border-radius:0 0 5px 5px;
+  background:#161d29;padding:8px 11px;animation:drop .2s}
+.idlecard .why{font-size:11px;color:var(--ink);margin-bottom:6px;line-height:1.4}
+.idlecard .why b{color:var(--warn)}
+.idlecard .act{font-family:var(--mono);font-size:10px;padding:3px 9px;border-radius:3px;
+  border:1px solid rgba(111,179,210,.45);color:var(--info);background:rgba(111,179,210,.07)}
+.idlecard .act:hover{background:rgba(111,179,210,.16)}
+
+/* ============ BOTTOM: minimap strip ============ */
+#footer{flex:0 0 62px;display:flex;align-items:stretch;gap:10px;padding:7px 12px;
+  background:linear-gradient(0deg,#0c111a,#0e141d);border-top:1px solid var(--line2);z-index:40}
+#crumbzone{flex:0 0 190px;display:flex;align-items:center}
+#crumb{display:none;align-items:center;gap:7px;font-family:var(--mono);font-size:10px;color:var(--ink-dim);
+  border:1px dashed #33425c;border-radius:4px;padding:5px 9px;cursor:pointer;max-width:100%;overflow:hidden;white-space:nowrap}
+#crumb.show{display:flex;animation:drop .2s}
+#crumb:hover{color:var(--steel);border-color:var(--steel)}
+#minimap{flex:1;display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.mseg{position:relative;border:1px solid var(--line2);border-radius:5px;background:var(--panel2);
+  display:flex;align-items:center;gap:8px;padding:0 10px;cursor:pointer;overflow:hidden;transition:all .2s}
+.mseg:hover{border-color:#3a4c69}
+.mseg.focused{border-color:var(--steel);box-shadow:0 0 0 1px rgba(143,168,200,.35),inset 0 0 18px rgba(143,168,200,.06)}
+.mseg .mnum{font-family:var(--mono);font-size:15px;font-weight:700;color:var(--ink-faint)}
+.mseg.focused .mnum{color:var(--steel)}
+.mseg .mdot{width:8px;height:8px;border-radius:2px;flex:0 0 8px}
+.mseg .mname{font-size:11px;font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mseg .mage{margin-left:auto;font-family:var(--mono);font-size:9px;color:var(--ink-faint);white-space:nowrap}
+.mseg .mbadge{font-family:var(--mono);font-size:9px;font-weight:700;min-width:15px;text-align:center;
+  color:#0b0e13;background:var(--warn);border-radius:8px;padding:1px 4px}
+.mmark{font-size:9px;line-height:1}
+.mmark.blk{color:var(--bad);animation:blink 1.2s steps(2) infinite}
+.mmark.dec{color:var(--warn)}
+@keyframes blink{50%{opacity:.25}}
+/* fog tiers on minimap */
+.mseg.f-cooling{filter:saturate(.72) brightness(.92)}
+.mseg.f-cooling .mage{color:var(--warn)}
+.mseg.f-cold{filter:saturate(.35) brightness(.78)}
+.mseg.f-cold .mage{color:var(--purple);font-weight:700}
+.mseg.f-frozen{filter:saturate(.12) brightness(.62)}
+.mseg.f-frozen .mage{color:#9fb0c8;font-weight:700}
+.mseg.defrost{animation:defrost .9s ease-out}
+@keyframes defrost{0%{filter:saturate(.15) brightness(.6)}100%{filter:none}}
+/* pings: fade over ~30s */
+.ping{position:absolute;right:8px;top:6px;width:9px;height:9px;border-radius:50%;pointer-events:none;
+  animation:pingfade 30s linear forwards}
+.ping:after{content:"";position:absolute;inset:-5px;border-radius:50%;border:1.5px solid currentColor;
+  animation:pingring 1.4s ease-out 4}
+@keyframes pingfade{0%{opacity:1}70%{opacity:.55}100%{opacity:0}}
+@keyframes pingring{0%{transform:scale(.4);opacity:1}100%{transform:scale(1.8);opacity:0}}
+#hintzone{flex:0 0 auto;display:flex;align-items:center}
+#hints{font-size:10px;color:var(--ink-faint);display:flex;gap:9px;flex-wrap:wrap;max-width:330px;justify-content:flex-end}
+#hints span{white-space:nowrap}
+
+/* ============ toasts (non-modal corner alerts) ============ */
+#toasts{position:fixed;right:12px;bottom:76px;z-index:80;display:flex;flex-direction:column;gap:8px;width:330px}
+.toast{border:1px solid var(--line2);border-left:3px solid var(--info);border-radius:5px;background:#131b28;
+  padding:9px 12px;box-shadow:0 8px 26px rgba(0,0,0,.55);cursor:pointer;animation:toastin .25s ease-out}
+.toast:hover{border-color:#3a4c69}
+.toast.warn{border-left-color:var(--warn)} .toast.ok{border-left-color:var(--ok)}
+.toast .th{display:flex;gap:7px;align-items:center;font-family:var(--mono);font-size:9.5px;color:var(--ink-faint);margin-bottom:3px}
+.toast .th b{color:var(--steel);letter-spacing:.08em}
+.toast .tb{font-size:11.5px;color:var(--ink);line-height:1.4}
+.toast .tk{font-size:9.5px;color:var(--ink-faint);margin-top:4px}
+.toast.bye{opacity:0;transform:translateX(20px);transition:all .3s}
+@keyframes toastin{from{opacity:0;transform:translateX(24px)}to{opacity:1;transform:none}}
+#focustag{position:fixed;top:52px;left:50%;transform:translateX(-50%);z-index:50;display:none;
+  font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--steel);
+  border:1px solid #33425c;border-radius:4px;padding:4px 12px;background:#121a28}
+body.focusmode #focustag{display:block;animation:drop .2s}
+</style>
+</head>
+<body>
+
+<header id="topbar">
+  <div id="badge">
+    <span class="name">WAR<b>/</b>ROOM</span>
+    <span class="fuse">interrupts left · truth center · forces right — fuses inbox triage + living briefs + fleet + TUI keyboard density</span>
+  </div>
+  <div id="topstats">
+    <span title="warm contexts">warm <b id="st-warm">1</b></span>
+    <span title="pending decisions">decisions <b id="st-dec">2</b></span>
+    <span title="idle or blocked agents">idle/blk <b id="st-idle">2</b></span>
+    <span title="unseen interrupts">unseen <b id="st-unseen">4</b></span>
+  </div>
+  <button class="tbtn primary" id="simbtn" title="Simulate an incoming agent report">▶ simulate report</button>
+  <button class="tbtn" id="wfbtn">try the workflows</button>
+  <button class="tbtn" id="cmpbtn">ⓘ compare</button>
+  <a href="index.html">← index</a>
+</header>
+
+<div class="floatpanel" id="wfpanel">
+  <h3>Try the workflows</h3>
+  <ol>
+    <li><b>Capture</b> — press <kbd>c</kbd> (or click the input, top-left), type a thought, <kbd>Enter</kbd>. It lands at the top of the triage queue, unclassified — file it later with <kbd>o</kbd>.</li>
+    <li><b>Alert contract</b> — click <b>▶ simulate report</b> (or wait ~8s). Watch: ping on the minimap, corner toast, unseen badge. Your view never moves. <kbd>Space</kbd> jumps to the alert; <kbd>Esc</kbd> brings the camera back.</li>
+    <li><b>The sweep</b> — press <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd> in sequence. Each stop leads with a delta-first resume header; fog clears as you visit each project.</li>
+    <li><b>Idle button</b> — click the amber <b>idle/blocked</b> button (right pane, or <kbd>i</kbd>) repeatedly to cycle through stalled agents with reasons and suggested actions.</li>
+    <li><b>Deep recovery + decision</b> — press <kbd>3</kbd> or <kbd>4</kbd> and take the offered <b>deep recovery</b> briefing. Then open the <b>gate-desync decision</b> from the triage queue, re-read the accumulated context, and commit — navigator unblocks in the production bar.</li>
+  </ol>
+</div>
+
+<div class="floatpanel" id="cmppanel">
+  <h3>Strengths / weaknesses</h3>
+  <div class="swcol s"><h4>Strengths</h4><ul>
+    <li>Every interrupt lands in one triageable queue — nothing modal, nothing lost, keyboard-speed processing.</li>
+    <li>The center brief is a maintained "state of the world", so re-orientation is reading, not archaeology.</li>
+    <li>Whole-fleet capacity and stalls are visible at all times in the production bar.</li>
+  </ul></div>
+  <div class="swcol w"><h4>Weaknesses</h4><ul>
+    <li>Three dense panes demand screen width and sustained attention — hostile on a laptop in a meeting.</li>
+    <li>Briefs stay truthful only if curated; a stale brief is worse than no brief.</li>
+    <li>The triage queue can itself become a guilt inbox if arrivals outpace processing.</li>
+  </ul></div>
+</div>
+
+<main id="grid">
+  <!-- LEFT: interrupts -->
+  <aside class="pane" id="triage">
+    <div class="panehead"><span class="sc">Triage — interrupts</span><span class="cnt" id="qcount"></span></div>
+    <div id="capbox">
+      <input id="capinput" type="text" autocomplete="off" spellcheck="false"
+        placeholder="c — capture a thought · Enter files it unsorted">
+    </div>
+    <div id="queue"></div>
+  </aside>
+
+  <!-- CENTER: truth -->
+  <section class="pane" id="center">
+    <div id="fogveil"><span class="ftag" id="fogtag">DECLASSIFYING…</span></div>
+    <div id="centerscroll"></div>
+  </section>
+
+  <!-- RIGHT: forces -->
+  <aside class="pane" id="production">
+    <div class="panehead"><span class="sc">Production — forces</span><span class="cnt" id="pcount"></span></div>
+    <div id="idlewrap">
+      <button id="idlebtn" title="Cycle through idle/blocked agents (i)">
+        <span class="ic">◈</span><span class="lbl">idle / blocked</span><span class="num" id="idlenum">2</span>
+      </button>
+    </div>
+    <div id="slots"></div>
+  </aside>
+</main>
+
+<footer id="footer">
+  <div id="crumbzone"><button id="crumb" title="Esc — camera back"></button></div>
+  <div id="minimap"></div>
+  <div id="hintzone"><div id="hints">
+    <span><kbd>1</kbd>–<kbd>4</kbd> focus · dbl expand</span>
+    <span><kbd>Space</kbd> alert</span>
+    <span><kbd>Esc</kbd> back</span>
+    <span><kbd>j</kbd><kbd>k</kbd> queue</span>
+    <span><kbd>e</kbd> archive <kbd>z</kbd> snooze</span>
+    <span><kbd>o</kbd> open</span>
+    <span><kbd>c</kbd> capture</span>
+    <span><kbd>i</kbd> idle</span>
+  </div></div>
+</footer>
+
+<div id="focustag">FOCUS — ESC TO RESTORE FLANKS</div>
+<div id="toasts"></div>
+
+<script>
+/* =================================================================
+   WAR ROOM — shared WORLD dataset (verbatim from SPEC.md) + round-2
+   extension (SPEC2.md). All state local; no external requests.
+   ================================================================= */
+const WORLD = {
+  now: "2026-08-22T14:30:00",
+  projects: [
+    { id: "albion", name: "Albion Automation", color: "#e0a458",
+      status: "active", goal: "Fully autonomous gathering + market loop",
+      agents: [
+        { id: "packet-tracer", name: "packet-tracer", state: "working",
+          task: "Instrument gate transition packets", lastReport: "12:41" },
+        { id: "navigator", name: "navigator", state: "blocked",
+          task: "Cross-map routing through gates", lastReport: "11:58",
+          blockedOn: "decision-gate-desync" },
+        { id: "market-bot", name: "market-bot", state: "idle",
+          task: "Waiting on price feed refactor", lastReport: "09:12" }
+      ],
+      tasks: [
+        { t: "Fix gate desync", state: "blocked" },
+        { t: "Price feed refactor", state: "todo" },
+        { t: "Resource route optimizer", state: "done" }
+      ]},
+    { id: "homelab", name: "Homelab Migration", color: "#6fb3d2",
+      status: "active", goal: "Move all services from old NUC to Proxmox cluster",
+      agents: [
+        { id: "infra-agent", name: "infra-agent", state: "working",
+          task: "Migrating Postgres volumes to new ZFS pool", lastReport: "14:07" }
+      ],
+      tasks: [
+        { t: "Migrate Postgres volumes", state: "doing" },
+        { t: "Move reverse proxy + certs", state: "todo" },
+        { t: "Decommission old NUC", state: "todo" }
+      ]},
+    { id: "paper", name: "Anomaly Detection Paper", color: "#b58ee0",
+      status: "deadline", goal: "Submit to conference — deadline Sep 5",
+      agents: [],
+      tasks: [
+        { t: "Rerun eval on v2 dataset", state: "doing" },
+        { t: "Write related-work section", state: "todo" },
+        { t: "Address advisor comments", state: "blocked" }
+      ]},
+    { id: "apartment", name: "Apartment Hunt", color: "#7fc98a",
+      status: "background", goal: "Find 2br under budget before Nov",
+      agents: [],
+      tasks: [
+        { t: "Visit Riverside listing", state: "todo" },
+        { t: "Compare commute times", state: "todo" }
+      ]}
+  ],
+  captures: [ // unclassified quick captures
+    { t: "idea: agents should emit confidence with every status report", ts: "13:22" },
+    { t: "check if ZFS snapshot schedule survives migration", ts: "10:45" },
+    { t: "landlord mentioned garage option?? follow up", ts: "yesterday" }
+  ],
+  events: [ // newest last
+    { ts: "09:12", proj: "albion", agent: "market-bot", kind: "status", t: "Paused: price feed schema changed upstream, refactor needed" },
+    { ts: "10:03", proj: "paper", kind: "note", t: "Advisor replied: eval section needs v2 dataset numbers" },
+    { ts: "10:45", proj: null, kind: "capture", t: "check if ZFS snapshot schedule survives migration" },
+    { ts: "11:20", proj: "albion", agent: "packet-tracer", kind: "status", t: "Gate-probe run #2: emitted 1 move, restarted client — server position UNCHANGED" },
+    { ts: "11:58", proj: "albion", agent: "navigator", kind: "blocked", t: "Blocked: cannot route through gates until desync strategy chosen" },
+    { ts: "12:41", proj: "albion", agent: "packet-tracer", kind: "status", t: "Gate-probe run #3: same result. Server never applied any move after gate transition" },
+    { ts: "13:22", proj: null, kind: "capture", t: "idea: agents should emit confidence with every status report" },
+    { ts: "14:07", proj: "homelab", agent: "infra-agent", kind: "status", t: "Postgres volume 2/5 migrated, ETA 40m for remainder" }
+  ],
+  decisions: [
+    { id: "decision-gate-desync", proj: "albion", state: "pending",
+      title: "Gate desync fix: restart-probe vs re-handshake",
+      options: ["Restart-probe: auto-restart client after each gate to resync",
+                "Re-handshake: reverse-engineer and replay the gate handshake packets"],
+      due: "today" },
+    { id: "decision-eval-scope", proj: "paper", state: "pending",
+      title: "Eval scope: rerun full grid or only v2 delta",
+      options: ["Full grid (2 days compute)", "v2 delta only (4h, weaker claim)"],
+      due: "Aug 25" }
+  ],
+  decisionContext: [ // accumulated context behind the gate-desync decision, oldest first
+    { ts: "Aug 19 16:10", t: "navigator first reported chars 'rubber-banding' to gate entrance after transitions" },
+    { ts: "Aug 19 18:34", t: "hypothesis 1: movement-lock flag not cleared — DISPROVEN (flag clears in packet trace)" },
+    { ts: "Aug 20 11:02", t: "hypothesis 2: reliable-seq collision after zone load — DISPROVEN (seqs contiguous)" },
+    { ts: "Aug 20 15:47", t: "key insight: all movement after gate is client-side prediction; server acks contain no position echo" },
+    { ts: "Aug 21 12:30", t: "restart experiment: emit 1 move, restart client, read authoritative resume position → server never moved the char" },
+    { ts: "Aug 21 12:55", t: "conclusion: server drops move stream after gate until a fresh handshake occurs. Two viable fixes identified" },
+    { ts: "Aug 22 12:41", t: "packet-tracer run #3 confirms: reproducible 3/3 times" }
+  ],
+  incomingReport: { ts: "14:31", proj: "albion", agent: "packet-tracer", kind: "status",
+    t: "Gate-probe run #4 complete: server pos unchanged after 3 moves — desync confirmed at handshake layer" }
+};
+/* Round-2 WORLD extension (SPEC2) */
+WORLD.lastVisited = { albion: "13:05", homelab: "14:10", paper: "2026-08-21T18:00", apartment: "2026-08-19T09:30" };
+// staleness tiers (vs now=14:30): warm <30m (homelab), cooling <2h (albion),
+// cold <1d (paper), frozen >1d (apartment)
+WORLD.sinceLastVisit = { // events accumulated while user was away, per project
+  albion: 2, homelab: 1, paper: 1, apartment: 0
+};
+
+/* ================= derived data & app state ================= */
+const PROJ_ORDER = ["albion","homelab","paper","apartment"];
+const P = {}; WORLD.projects.forEach(p => P[p.id] = p);
+const ETAS = { "packet-tracer": "25m", "infra-agent": "40m" };
+const PROG = { "packet-tracer": 62, "infra-agent": 40 };
+let uidn = 0; const uid = () => "q" + (++uidn);
+
+const state = {
+  sel: "albion",
+  mode: "brief",           // brief | decision | recovery
+  decId: null,
+  qIdx: 0,
+  back: [],                // breadcrumb stack for Esc "camera back"
+  idleIdx: -1,
+  idleOpen: null,          // agent id whose idle-card is expanded
+  simRun: 3, autoFired: false,
+  clockMin: 30,            // minutes past 14:00 of sim time
+  // fog of staleness — minutes since last visit (vs now 14:30)
+  age: { albion: 85, homelab: 20, paper: 1230, apartment: 4620 },
+  visited: { albion: false, homelab: false, paper: false, apartment: false },
+  unseen: Object.assign({}, WORLD.sinceLastVisit),
+  deltas: {
+    albion:   ["navigator blocked — awaiting desync strategy decision",
+               "gate-probe run #3 confirmed: server never applied any move"],
+    homelab:  ["Postgres volumes 2/5 migrated — ETA 40m for remainder"],
+    paper:    ["advisor replied: eval section needs v2 dataset numbers"],
+    apartment: []
+  },
+  resumeSnap: null,        // captured deltas at moment of arrival
+  resumeAge: null,
+  caughtUp: {},
+  logs: {},                // per-project append-only log
+  queue: []                // triage items, newest first
+};
+
+/* build per-project logs from WORLD.events */
+PROJ_ORDER.forEach(id => state.logs[id] = []);
+WORLD.events.forEach(e => {
+  if (!e.proj) return;
+  state.logs[e.proj].push({ ts: e.ts, agent: e.agent || null, t: e.t,
+    mode: e.kind === "blocked" ? "blk" : e.kind === "note" ? "note" : "add" });
+});
+
+/* build triage queue: reports + captures + decisions, newest first */
+(function buildQueue(){
+  const q = [];
+  q.push({ id: uid(), kind: "status", proj: "homelab", agent: "infra-agent", ts: "14:07",
+    t: "Postgres volume 2/5 migrated, ETA 40m for remainder", unseen: true });
+  q.push({ id: uid(), kind: "capture", proj: null, ts: "13:22",
+    t: "idea: agents should emit confidence with every status report", unseen: false });
+  q.push({ id: uid(), kind: "status", proj: "albion", agent: "packet-tracer", ts: "12:41",
+    t: "Gate-probe run #3: same result. Server never applied any move after gate transition", unseen: true });
+  q.push({ id: uid(), kind: "blocked", proj: "albion", agent: "navigator", ts: "11:58",
+    t: "Blocked: cannot route through gates until desync strategy chosen", unseen: true });
+  q.push({ id: uid(), kind: "decision", proj: "albion", ts: "due today", decId: "decision-gate-desync",
+    t: "Gate desync fix: restart-probe vs re-handshake", unseen: false });
+  q.push({ id: uid(), kind: "decision", proj: "paper", ts: "due Aug 25", decId: "decision-eval-scope",
+    t: "Eval scope: rerun full grid or only v2 delta", unseen: false });
+  q.push({ id: uid(), kind: "capture", proj: null, ts: "10:45",
+    t: "check if ZFS snapshot schedule survives migration", unseen: false });
+  q.push({ id: uid(), kind: "note", proj: "paper", ts: "10:03",
+    t: "Advisor replied: eval section needs v2 dataset numbers", unseen: true });
+  q.push({ id: uid(), kind: "capture", proj: null, ts: "yesterday",
+    t: "landlord mentioned garage option?? follow up", unseen: false });
+  state.queue = q;
+})();
+
+/* hand-maintained "state of the world" briefs (the center's truth) */
+const BRIEFS = {
+  albion: 'Gathering loop is stable across three maps; the route optimizer shipped and paid for itself. ' +
+    'The campaign is stalled on <span class="hlr">gate desync</span>: after any gate transition the server silently ' +
+    'drops the move stream — every client-side move is pure prediction, the server keeps the character frozen at ' +
+    'the gate. packet-tracer proved this with the restart experiment (emit one move, restart client, read the ' +
+    'authoritative resume position) and has reproduced it 3/3. <span class="hl">Two fixes are on the table</span> ' +
+    'and navigator is blocked until one is chosen. Market loop is separately paused on an upstream price-feed ' +
+    'schema change.',
+  homelab: 'Migration is mid-flight and healthy. infra-agent is moving the Postgres volumes onto the new ZFS pool ' +
+    '(2/5 done, ETA ~40m); nothing depends on them until the reverse proxy moves. Next up: reverse proxy + certs, ' +
+    'then the old NUC gets decommissioned. One open question captured earlier: whether the ZFS snapshot schedule ' +
+    'survives the migration.',
+  paper: 'Deadline <span class="hlr">Sep 5</span>. The advisor’s reply changes the plan: the eval section must show ' +
+    'v2 dataset numbers, which forces the <span class="hl">eval-scope decision</span> — rerun the full grid (2 days ' +
+    'of compute) or only the v2 delta (4h, weaker claim). Related-work section is still unwritten; advisor comments ' +
+    'partially blocked behind the same eval choice.',
+  apartment: 'Background campaign, no agents. Two moves waiting on you: visit the Riverside listing and run the ' +
+    'commute comparison. One dangling thread from last contact — the landlord may have mentioned a ' +
+    '<span class="hl">garage option</span>; follow up before it evaporates.'
+};
+
+const SUGGEST = {
+  navigator: { why: 'Blocked on <b>decision-gate-desync</b> — routing through gates cannot proceed until a desync strategy is chosen. Blocked since 11:58.',
+    act: '⚖ Open the blocking decision', run: () => { openDecision("decision-gate-desync"); } },
+  "market-bot": { why: 'Idle since 09:12 — upstream price feed changed schema; its task waits on the <b>price feed refactor</b>, which nobody has started.',
+    act: '▸ Start price-feed refactor now', run: () => startRefactor() }
+};
+
+/* ================= tiny utils ================= */
+const $ = s => document.querySelector(s);
+function esc(s){ return String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
+function tick(){ state.clockMin++; const h = 14 + Math.floor(state.clockMin/60), m = state.clockMin % 60;
+  return h + ":" + String(m).padStart(2,"0"); }
+function ageLabel(id){
+  if (state.visited[id]) return "now";
+  const m = state.age[id];
+  if (m < 60) return m + "m";
+  if (m < 1440) return (m/60).toFixed(m < 600 ? 1 : 0).replace(/\.0$/,"") + "h";
+  return (m/1440).toFixed(1) + "d";
+}
+function tier(id){
+  if (state.visited[id]) return "warm";
+  const m = state.age[id];
+  return m < 30 ? "warm" : m < 120 ? "cooling" : m < 1440 ? "cold" : "frozen";
+}
+function idleList(){
+  const out = [];
+  WORLD.projects.forEach(p => p.agents.forEach(a => {
+    if (a.state === "idle" || a.state === "blocked") out.push({ a, p });
+  }));
+  return out;
+}
+function totalUnseen(){ return PROJ_ORDER.reduce((n,id) => n + state.unseen[id], 0); }
+function pendingDecCount(){ return WORLD.decisions.filter(d => d.state === "pending").length; }
+
+/* ================= toasts (CONTRACT 3: non-modal alerts) ================= */
+function toast(cls, head, body, kicker, onclick){
+  const el = document.createElement("div");
+  el.className = "toast " + cls;
+  el.innerHTML = '<div class="th"><b>' + esc(head) + '</b></div><div class="tb">' + body + '</div>' +
+    (kicker ? '<div class="tk">' + esc(kicker) + '</div>' : '');
+  el.addEventListener("click", () => { if (onclick) onclick(); dismiss(el); });
+  $("#toasts").appendChild(el);
+  const dismiss = t => { t.classList.add("bye"); setTimeout(() => t.remove(), 320); };
+  setTimeout(() => { if (el.isConnected) dismiss(el); }, 6500);
+}
+
+/* ================= CONTRACT 1: minimap glance surface ================= */
+function renderMinimap(){
+  const mm = $("#minimap");
+  // keep existing ping elements alive across re-renders
+  const savedPings = {};
+  mm.querySelectorAll(".mseg").forEach(seg => {
+    const pings = seg.querySelectorAll(".ping");
+    if (pings.length) savedPings[seg.dataset.proj] = Array.from(pings);
+  });
+  mm.innerHTML = "";
+  PROJ_ORDER.forEach((id, i) => {
+    const p = P[id];
+    const seg = document.createElement("div");
+    seg.className = "mseg f-" + tier(id) + (state.sel === id ? " focused" : "");
+    seg.dataset.proj = id;
+    seg.title = p.name + " — " + (state.visited[id] ? "visited just now" : "last visited " + ageLabel(id) + " ago");
+    const blocked = p.agents.some(a => a.state === "blocked");
+    const dec = WORLD.decisions.some(d => d.proj === id && d.state === "pending");
+    seg.innerHTML =
+      '<span class="mnum">' + (i+1) + '</span>' +
+      '<span class="mdot" style="background:' + p.color + '"></span>' +
+      '<span class="mname">' + esc(p.name) + '</span>' +
+      (blocked ? '<span class="mmark blk" title="blocked agent — persistent marker">◆</span>' : '') +
+      (dec ? '<span class="mmark dec" title="pending decision — persistent marker">⚖</span>' : '') +
+      '<span class="mage">' + ageLabel(id) + '</span>' +
+      (state.unseen[id] ? '<span class="mbadge" title="unseen events">' + state.unseen[id] + '</span>' : '');
+    seg.addEventListener("click", () => { pushBack(); selectProject(id); });
+    if (savedPings[id]) savedPings[id].forEach(pg => seg.appendChild(pg));
+    mm.appendChild(seg);
+  });
+}
+function ping(projId, color){
+  const seg = $("#minimap").querySelector('.mseg[data-proj="' + projId + '"]');
+  if (!seg) return;
+  const el = document.createElement("span");
+  el.className = "ping";
+  el.style.background = color || P[projId].color;
+  el.style.color = color || P[projId].color;
+  seg.appendChild(el);
+  setTimeout(() => el.remove(), 30500); // fades over ~30s then gone
+}
+
+/* ================= CONTRACT 2: constant-time navigation ================= */
+function pushBack(){
+  state.back.push({ sel: state.sel, mode: state.mode, decId: state.decId });
+  if (state.back.length > 8) state.back.shift();
+  renderCrumb();
+}
+function renderCrumb(){
+  const c = $("#crumb");
+  if (!state.back.length){ c.className = ""; return; }
+  const b = state.back[state.back.length - 1];
+  const modeName = b.mode === "brief" ? "brief" : b.mode;
+  c.className = "show";
+  c.innerHTML = '⤺ <kbd>Esc</kbd> back — ' + esc(P[b.sel].name) + ' · ' + esc(modeName);
+}
+function goBack(){
+  // priority: overlays → focus mode → deep views → breadcrumb stack
+  if ($("#wfpanel").classList.contains("open") || $("#cmppanel").classList.contains("open")){
+    $("#wfpanel").classList.remove("open"); $("#cmppanel").classList.remove("open"); return;
+  }
+  if (document.body.classList.contains("focusmode")){
+    document.body.classList.remove("focusmode"); return;
+  }
+  if (state.back.length){
+    const b = state.back.pop();
+    state.sel = null; // force re-entry
+    selectProject(b.sel, { keepSnap: false });
+    state.mode = b.mode; state.decId = b.decId;
+    renderCenter(); renderCrumb();
+    return;
+  }
+  if (state.mode !== "brief"){ state.mode = "brief"; renderCenter(); }
+}
+let lastKey = null, lastKeyT = 0;
+function handleDigit(n){
+  const id = PROJ_ORDER[n-1];
+  const now = Date.now();
+  if (lastKey === n && now - lastKeyT < 450){
+    // double-press = expand/center (CONTRACT 2)
+    document.body.classList.toggle("focusmode");
+    lastKey = null;
+    if (state.sel !== id) selectProject(id);
+    return;
+  }
+  lastKey = n; lastKeyT = now;
+  if (state.sel === id && state.mode === "brief") return;
+  selectProject(id);
+}
+/* Space = jump to most recent unseen alert */
+function jumpToAlert(){
+  const it = state.queue.find(q => q.unseen);
+  if (!it){ toast("ok", "ALL CLEAR", "No unseen alerts — every interrupt has been triaged or seen.", null); return; }
+  pushBack();
+  openItem(it, { fromJump: true });
+}
+
+/* ================= CONTRACT 5: fog of staleness / visiting ================= */
+function selectProject(id, opts){
+  opts = opts || {};
+  const changed = state.sel !== id;
+  const prevTier = tier(id);
+  if (changed){
+    // snapshot deltas for the delta-first resume header, then clear counters
+    state.resumeSnap = state.deltas[id].slice();
+    state.resumeAge = state.visited[id] ? "now" : ageLabel(id);
+    state.resumeTier = prevTier;
+    state.deltas[id] = [];
+    state.unseen[id] = 0;
+    state.queue.forEach(q => { if (q.proj === id) q.unseen = false; });
+    state.visited[id] = true; // fog clears
+    state.sel = id; state.mode = "brief"; state.decId = null;
+    if (prevTier !== "warm" && !opts.quiet){
+      // animate the fog clearing
+      const veil = $("#fogveil");
+      $("#fogtag").textContent = prevTier === "frozen" ? "THAWING FROZEN CONTEXT…" : "CLEARING FOG — " + state.resumeAge + " STALE";
+      veil.classList.remove("clearing"); void veil.offsetWidth; veil.classList.add("clearing");
+      const seg = $("#minimap").querySelector('.mseg[data-proj="' + id + '"]');
+      if (seg){ seg.classList.add("defrost"); setTimeout(() => seg.classList.remove("defrost"), 950); }
+    }
+  } else {
+    // re-selecting the focused project pops any deep view back to the brief
+    state.mode = "brief"; state.decId = null;
+  }
+  renderAll();
+}
+
+/* ================= CENTER renderers ================= */
+function resumeHeaderHTML(id){
+  // CONTRACT 6: delta-first resume header
+  const t = state.resumeTier || "warm";
+  const snap = state.resumeSnap || [];
+  const agestr = state.resumeAge || "now";
+  let inner;
+  if (agestr === "now" && !snap.length){
+    inner = '<div class="rh"><span class="sc">Resume</span></div><div class="cur">✓ You are current — nothing landed since your last look.</div>';
+  } else if (!snap.length){
+    inner = '<div class="rh"><span class="sc">Since you left</span><span class="age">' + esc(agestr) + ' ago</span></div>' +
+      '<div class="cur" style="color:var(--ink-dim)">No new events while you were away' + (t === "frozen" ? " — context frozen." : ".") + '</div>';
+  } else {
+    inner = '<div class="rh"><span class="sc">Since you left</span><span class="age">' + esc(agestr) + ' ago — ' +
+      snap.length + ' event' + (snap.length > 1 ? 's' : '') + '</span></div>' +
+      (snap.length === 1 && t === "warm"
+        ? '<div class="cur" style="color:var(--ink)">· ' + esc(snap[0]) + '</div>'
+        : '<ul>' + snap.map(d => '<li>' + esc(d) + '</li>').join('') + '</ul>');
+  }
+  if ((t === "cold" || t === "frozen") && !state.caughtUp[id]){
+    inner += '<div class="recover"><button class="recoverbtn" data-act="recover">❄ Run deep recovery — ' +
+      (t === "frozen" ? "frozen " : "cold ") + esc(agestr) + ' of drift to replay</button></div>';
+  }
+  return '<div id="resume" class="' + t + '">' + inner + '</div>';
+}
+function logHTML(id, flashTs){
+  const rows = state.logs[id];
+  if (!rows.length) return '<div style="color:var(--ink-faint);font-size:12px">No agent activity — manual campaign. Everything above is the full truth.</div>';
+  return '<div id="log">' + rows.map(l => {
+    const g = l.mode === "blk" ? "!" : l.mode === "chg" ? "~" : l.mode === "note" ? "·" : "+";
+    return '<div class="logline ' + l.mode + (flashTs && l.ts === flashTs ? ' flash' : '') + '" data-ts="' + esc(l.ts) + '">' +
+      '<span class="g">' + g + '</span><span class="lts">' + esc(l.ts) + (l.agent ? '' : '') + '</span>' +
+      '<span class="lt">' + (l.agent ? '<span class="lag">' + esc(l.agent) + '</span> — ' : '') + esc(l.t) + '</span></div>';
+  }).join('') + '</div>';
+}
+function renderBrief(flashTs){
+  const p = P[state.sel];
+  const html =
+    '<div id="cenhead"><span class="pdot" style="background:' + p.color + '"></span>' +
+    '<h1>' + esc(p.name) + '</h1>' +
+    '<span class="statuschip ' + p.status + '">' + p.status + '</span>' +
+    '<span class="cnt mono" style="font-size:10px;color:var(--ink-faint);margin-left:auto">key ' + (PROJ_ORDER.indexOf(p.id)+1) + ' · double-press to expand</span></div>' +
+    '<div id="cengoal">◈ ' + esc(p.goal) + '</div>' +
+    resumeHeaderHTML(p.id) +
+    '<div class="secttl"><span class="sc">State of the world — maintained brief</span></div>' +
+    '<div id="brieftext">' + BRIEFS[p.id] + '</div>' +
+    '<div class="secttl"><span class="sc">Tasks</span></div>' +
+    '<table class="tasks">' + p.tasks.map(t =>
+      '<tr><td><span class="tstate ' + t.state + '">' + t.state + '</span></td><td>' + esc(t.t) + '</td></tr>').join('') + '</table>' +
+    decChipsHTML(p.id) +
+    '<div class="secttl"><span class="sc">Append-only log — agent updates land as diffs</span></div>' +
+    logHTML(p.id, flashTs);
+  $("#centerscroll").innerHTML = html;
+  const rb = $("#centerscroll").querySelector('[data-act="recover"]');
+  if (rb) rb.addEventListener("click", () => { state.mode = "recovery"; renderCenter(); });
+  $("#centerscroll").querySelectorAll("[data-dec]").forEach(b =>
+    b.addEventListener("click", () => openDecision(b.dataset.dec)));
+}
+function decChipsHTML(id){
+  const ds = WORLD.decisions.filter(d => d.proj === id && d.state === "pending");
+  if (!ds.length) return "";
+  return '<div class="secttl"><span class="sc">Pending decisions</span></div>' +
+    ds.map(d => '<button class="qbtn" data-dec="' + d.id + '" style="font-size:11px;padding:6px 12px;margin-right:8px;border-color:rgba(224,164,88,.45);color:var(--warn)">⚖ ' +
+      esc(d.title) + ' <span style="color:var(--ink-faint)">· due ' + esc(d.due) + '</span></button>').join('');
+}
+
+/* ================= CONTRACT 7: deep recovery + decision flow ================= */
+function renderRecovery(){
+  const p = P[state.sel];
+  const evs = WORLD.events.filter(e => e.proj === p.id);
+  const caps = p.id === "apartment" ? [WORLD.captures[2]] : p.id === "homelab" ? [WORLD.captures[1]] : [];
+  const decs = WORLD.decisions.filter(d => d.proj === p.id && d.state === "pending");
+  const next = {
+    paper: ["Kick off the v2 eval rerun (scope decision gates how big)", "Draft related-work skeleton tonight — zero dependencies", "Reply to advisor confirming the plan"],
+    apartment: ["Call landlord re: garage option before it goes stale", "Book the Riverside viewing for the weekend", "Run the commute comparison while waiting"],
+    albion: ["Commit the gate-desync fix strategy", "Queue the price-feed refactor to unblock market-bot"],
+    homelab: ["Watch for volume 5/5, then start reverse proxy + certs"]
+  }[p.id] || [];
+  let html = '<button class="viewback" data-act="back">⤺ ESC · back to brief</button>' +
+    '<div class="recv"><div class="dochead"><span class="pdot" style="background:' + p.color + '"></span>' +
+    '<h2>DEEP RECOVERY — ' + esc(p.name) + '</h2></div>' +
+    '<div class="docmeta">context ' + tierWord(p.id) + ' · last visited ' + esc(state.resumeAge || ageLabel(p.id)) + ' ago · full replay below</div>' +
+    '<div class="recvsec"><div class="secttl"><span class="sc">Mission</span></div><div class="body">' + esc(p.goal) + '</div></div>' +
+    '<div class="recvsec"><div class="secttl"><span class="sc">Where you left off</span></div><div class="body">' + BRIEFS[p.id] + '</div></div>';
+  html += '<div class="recvsec"><div class="secttl"><span class="sc">Replay — everything that happened</span></div>';
+  html += evs.length
+    ? evs.map(e => '<div class="ctxline"><span class="cts">' + esc(e.ts) + '</span><span class="ct">' + (e.agent ? '<b style="color:var(--steel)">' + esc(e.agent) + '</b> — ' : '') + esc(e.t) + '</span></div>').join('')
+    : '<div class="body" style="color:var(--ink-faint)">No recorded events — this campaign moves only when you do.</div>';
+  html += '</div>';
+  if (caps.length) html += '<div class="recvsec"><div class="secttl"><span class="sc">Related loose captures</span></div>' +
+    caps.map(c => '<div class="ctxline"><span class="cts">' + esc(c.ts) + '</span><span class="ct">' + esc(c.t) + '</span></div>').join('') + '</div>';
+  if (decs.length) html += '<div class="recvsec"><div class="secttl"><span class="sc">Open decisions</span></div>' +
+    decs.map(d => '<button class="qbtn" data-dec="' + d.id + '" style="font-size:11px;padding:6px 12px;border-color:rgba(224,164,88,.45);color:var(--warn)">⚖ ' + esc(d.title) + ' · due ' + esc(d.due) + '</button>').join(' ') + '</div>';
+  html += '<div class="recvsec"><div class="secttl"><span class="sc">Suggested next actions</span></div>' +
+    next.map(n => '<div class="ctxline key"><span class="cts">→</span><span class="ct">' + esc(n) + '</span></div>').join('') + '</div>';
+  html += '<button class="caughtup" data-act="caught">✓ Caught up — return to brief</button></div>';
+  $("#centerscroll").innerHTML = html;
+  $("#centerscroll").querySelector('[data-act="back"]').addEventListener("click", () => { state.mode = "brief"; renderCenter(); });
+  $("#centerscroll").querySelector('[data-act="caught"]').addEventListener("click", () => {
+    state.caughtUp[state.sel] = true; state.mode = "brief";
+    toast("ok", "CONTEXT RESTORED", esc(P[state.sel].name) + " marked warm — fog cleared.", null);
+    renderAll();
+  });
+  $("#centerscroll").querySelectorAll("[data-dec]").forEach(b =>
+    b.addEventListener("click", () => openDecision(b.dataset.dec)));
+}
+function tierWord(id){ const t = tier(id); return t === "warm" ? "warm" : t.toUpperCase(); }
+
+function openDecision(decId){
+  const d = WORLD.decisions.find(x => x.id === decId);
+  if (!d) return;
+  if (state.sel !== d.proj){ pushBack(); selectProject(d.proj); }
+  state.mode = "decision"; state.decId = decId;
+  renderCenter();
+}
+function renderDecision(){
+  const d = WORLD.decisions.find(x => x.id === state.decId);
+  const p = P[d.proj];
+  const ctx = d.id === "decision-gate-desync" ? WORLD.decisionContext : [
+    { ts: "Aug 20 10:03", t: "advisor replied: eval section needs v2 dataset numbers to be credible" },
+    { ts: "Aug 21 17:40", t: "compute check: full grid = ~2 days on the shared cluster; v2 delta alone = ~4h" },
+    { ts: "Aug 21 17:55", t: "risk: delta-only weakens the headline claim reviewers flagged last cycle" }
+  ];
+  const keyIdx = d.id === "decision-gate-desync" ? [3,4,5] : [0];
+  const optNotes = d.id === "decision-gate-desync"
+    ? ["Cheap, ships today. Costs ~3min per gate transition; brittle if the client patches login flow.",
+       "The real fix. Days of packet reverse-engineering, but gates become free forever after."]
+    : ["Strongest claim; burns the buffer before the Sep 5 deadline.",
+       "Fast and safe on time, but reviewers may flag the weaker evidence."];
+  let html = '<button class="viewback" data-act="back">⤺ ESC · back to ' + esc(p.name) + ' brief</button>' +
+    '<div class="dochead"><span class="pdot" style="background:' + p.color + '"></span><h2>⚖ ' + esc(d.title) + '</h2></div>' +
+    '<div class="docmeta">' + esc(p.name) + ' · due ' + esc(d.due) + ' · state: ' + esc(d.state) +
+    (d.id === "decision-gate-desync" ? ' · blocking: navigator' : '') + '</div>' +
+    '<div class="secttl"><span class="sc">Accumulated context — re-read before committing (' + ctx.length + ' entries)</span></div>' +
+    ctx.map((c,i) => '<div class="ctxline' + (keyIdx.indexOf(i) >= 0 ? ' key' : '') + '"><span class="cts">' + esc(c.ts) + '</span><span class="ct">' + esc(c.t) + '</span></div>').join('');
+  if (d.state === "pending"){
+    html += '<div class="secttl"><span class="sc">Commit</span></div><div class="optrow">' +
+      d.options.map((o,i) => {
+        const parts = o.split(": ");
+        return '<div class="optcard"><h4>' + esc(parts[0]) + '</h4><p>' + esc(parts[1] || "") + '</p>' +
+          '<p style="color:var(--ink-faint)">' + esc(optNotes[i]) + '</p>' +
+          '<button class="commitbtn" data-opt="' + i + '">COMMIT — choose ' + esc(parts[0].toLowerCase()) + '</button></div>';
+      }).join('') + '</div>';
+  } else {
+    html += '<div class="resolvedbanner">✓ RESOLVED — chose <b>' + esc(d.options[d.chosen].split(": ")[0]) + '</b>' +
+      (d.id === "decision-gate-desync" ? ' · navigator unblocked and back in production' : '') + '</div>';
+  }
+  $("#centerscroll").innerHTML = html;
+  $("#centerscroll").querySelector('[data-act="back"]').addEventListener("click", () => { state.mode = "brief"; renderCenter(); });
+  $("#centerscroll").querySelectorAll(".commitbtn").forEach(b =>
+    b.addEventListener("click", () => commitDecision(d.id, +b.dataset.opt)));
+}
+function commitDecision(decId, opt){
+  const d = WORLD.decisions.find(x => x.id === decId);
+  if (!d || d.state !== "pending") return;
+  d.state = "resolved"; d.chosen = opt;
+  const short = d.options[opt].split(":")[0];
+  const ts = tick();
+  state.logs[d.proj].push({ ts, agent: null, mode: "chg", t: "DECISION RESOLVED — chose " + short + " (" + d.title + ")" });
+  if (decId === "decision-gate-desync"){
+    const nav = P.albion.agents.find(a => a.id === "navigator");
+    nav.state = "working"; delete nav.blockedOn;
+    nav.task = "Cross-map routing — implementing " + short.toLowerCase() + " strategy";
+    nav.lastReport = ts; ETAS.navigator = "90m"; PROG.navigator = 5;
+    P.albion.tasks[0].state = "doing";
+    state.logs.albion.push({ ts, agent: "navigator", mode: "add", t: "Unblocked → resuming cross-map routing with " + short.toLowerCase() + " strategy, ETA 90m" });
+    toast("ok", "NAVIGATOR UNBLOCKED", "Chose <b>" + esc(short) + "</b> — navigator re-queued in production, ETA 90m. Idle/blocked count: " + (idleList().length - 1) + " → recount.", null);
+    flashSlot("navigator");
+  } else {
+    P.paper.tasks[0].state = "doing";
+    state.logs.paper.push({ ts, agent: null, mode: "add", t: "Eval plan locked: " + d.options[opt] });
+    toast("ok", "DECISION COMMITTED", "Eval scope locked: <b>" + esc(short) + "</b>.", null);
+  }
+  // resolve matching triage item
+  const qi = state.queue.findIndex(q => q.decId === decId);
+  if (qi >= 0) archiveItem(state.queue[qi].id, true);
+  state.mode = "decision"; // stay to show resolved banner
+  renderAll();
+}
+function startRefactor(){
+  const mb = P.albion.agents.find(a => a.id === "market-bot");
+  if (mb.state !== "idle") return;
+  mb.state = "working"; mb.task = "Price feed refactor — adapting to new upstream schema";
+  const ts = tick(); mb.lastReport = ts; ETAS["market-bot"] = "60m"; PROG["market-bot"] = 3;
+  P.albion.tasks[1].state = "doing";
+  state.logs.albion.push({ ts, agent: "market-bot", mode: "add", t: "Assigned: price feed refactor started, ETA 60m" });
+  toast("ok", "MARKET-BOT TASKED", "Price-feed refactor started — market-bot back in production.", null);
+  state.idleOpen = null; flashSlot("market-bot");
+  renderAll();
+}
+let flashAgent = null;
+function flashSlot(id){ flashAgent = id; setTimeout(() => { flashAgent = null; }, 1500); }
+
+function renderCenter(flashTs){
+  if (state.mode === "decision") renderDecision();
+  else if (state.mode === "recovery") renderRecovery();
+  else renderBrief(flashTs);
+}
+
+/* ================= CONTRACT 4: idle/blocked agent button ================= */
+function cycleIdle(){
+  const list = idleList();
+  if (!list.length){
+    toast("ok", "PRODUCTION CLEAN", "No idle or blocked agents — the whole fleet is working.", null);
+    return;
+  }
+  state.idleIdx = (state.idleIdx + 1) % list.length;
+  const { a, p } = list[state.idleIdx];
+  state.idleOpen = a.id;
+  if (state.sel !== p.id){ pushBack(); selectProject(p.id); } else renderAll();
+  const el = $("#slots").querySelector('.slot[data-agent="' + a.id + '"]');
+  if (el) el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+/* ================= RIGHT: production bar ================= */
+function renderProd(){
+  const slots = $("#slots");
+  let working = 0, stalled = 0;
+  slots.innerHTML = "";
+  WORLD.projects.forEach(p => {
+    if (!p.agents.length) return;
+    const g = document.createElement("div");
+    g.className = "slotgroup";
+    g.innerHTML = '<div class="gh"><span class="dot" style="background:' + p.color + '"></span><span class="gn">' + esc(p.name) + '</span></div>';
+    p.agents.forEach(a => {
+      if (a.state === "working") working++; else stalled++;
+      const s = document.createElement("div");
+      s.className = "slot" + (state.idleOpen === a.id ? " cycling" : "") + (flashAgent === a.id ? " justchanged" : "");
+      s.dataset.agent = a.id;
+      s.style.setProperty("--pc", p.color);
+      const eta = ETAS[a.id];
+      s.innerHTML = '<div class="r1"><span class="aname">' + esc(a.name) + '</span>' +
+        '<span class="sstate ' + a.state + '">' + a.state + '</span></div>' +
+        '<div class="task">' + esc(a.task) + '</div>' +
+        '<div class="r3"><span>last ' + esc(a.lastReport) + '</span>' +
+        (a.state === "working" && eta ? '<span class="eta">eta <b>' + esc(eta) + '</b></span>' : '') +
+        (a.state === "blocked" ? '<span style="color:var(--bad)">on ' + esc(a.blockedOn || "—") + '</span>' : '') +
+        (a.state === "idle" ? '<span style="color:var(--warn)">no assignment</span>' : '') + '</div>' +
+        (a.state === "working" && PROG[a.id] != null ? '<div class="prog"><i style="width:' + PROG[a.id] + '%"></i></div>' : '');
+      s.addEventListener("click", () => {
+        if (state.sel !== p.id){ pushBack(); selectProject(p.id); }
+        state.idleOpen = (a.state !== "working" && state.idleOpen !== a.id) ? a.id : null;
+        renderProd();
+      });
+      g.appendChild(s);
+      if (state.idleOpen === a.id && SUGGEST[a.id] && a.state !== "working"){
+        const c = document.createElement("div");
+        c.className = "idlecard";
+        c.innerHTML = '<div class="why">' + SUGGEST[a.id].why + '</div>' +
+          '<button class="act">' + esc(SUGGEST[a.id].act) + '</button>';
+        c.querySelector(".act").addEventListener("click", ev => { ev.stopPropagation(); SUGGEST[a.id].run(); });
+        g.appendChild(c);
+      }
+    });
+    slots.appendChild(g);
+  });
+  const n = idleList().length;
+  $("#idlenum").textContent = n;
+  $("#idlebtn").className = n ? "" : "zero";
+  $("#pcount").textContent = working + " working · " + stalled + " stalled";
+  $("#st-idle").textContent = n;
+}
+
+/* ================= LEFT: triage queue ================= */
+function kindLabel(k){ return { status: "RPT", blocked: "BLK", decision: "DEC", capture: "CAP", note: "NOTE" }[k] || k; }
+function renderQueue(landedId){
+  const qEl = $("#queue");
+  qEl.innerHTML = "";
+  if (!state.queue.length){
+    qEl.innerHTML = '<div class="qempty">Queue zero. Nothing is waiting on you.<br>▶ simulate a report to see an arrival.</div>';
+  }
+  if (state.qIdx >= state.queue.length) state.qIdx = state.queue.length - 1;
+  if (state.qIdx < 0) state.qIdx = 0;
+  state.queue.forEach((it, i) => {
+    const el = document.createElement("div");
+    el.className = "qitem" + (i === state.qIdx ? " sel" : "") + (it.snoozed ? " snoozed" : "") + (it.id === landedId ? " landed" : "");
+    el.dataset.id = it.id;
+    const projChip = it.proj
+      ? '<span class="qproj"><span class="dot" style="background:' + P[it.proj].color + '"></span>' + esc(P[it.proj].name.split(" ")[0]) + '</span>'
+      : '<span class="qproj"><span class="dot" style="background:#3a4a60"></span>unsorted</span>';
+    el.innerHTML = (it.unseen ? '<span class="unseen-dot"></span>' : '') +
+      '<div class="qtop"><span class="qkind k-' + it.kind + '">' + kindLabel(it.kind) + '</span>' + projChip +
+      (it.agent ? '<span class="qproj mono" style="color:var(--steel)">' + esc(it.agent) + '</span>' : '') +
+      '<span class="qts">' + esc(it.ts) + '</span></div>' +
+      '<div class="qtext">' + esc(it.t) + '</div>' +
+      '<div class="qacts">' +
+        '<button class="qbtn" data-a="open"><u>o</u>&nbsp;' + (it.kind === "decision" ? "decide" : it.kind === "capture" ? "file" : "open") + '</button>' +
+        '<button class="qbtn" data-a="arch"><u>e</u>&nbsp;archive</button>' +
+        '<button class="qbtn" data-a="snz"><u>z</u>&nbsp;snooze</button>' +
+      '</div>' +
+      (it.filing ? fileRowHTML() : '');
+    el.addEventListener("click", ev => {
+      const b = ev.target.closest("button");
+      state.qIdx = i;
+      if (b && b.dataset.a === "arch"){ archiveItem(it.id); return; }
+      if (b && b.dataset.a === "snz"){ snoozeItem(it.id); return; }
+      if (b && b.dataset.a === "open"){ openItem(it); return; }
+      if (b && b.dataset.f){ fileCapture(it.id, b.dataset.f); return; }
+      if (!b) renderQueue();
+    });
+    qEl.appendChild(el);
+  });
+  $("#qcount").textContent = state.queue.length + " queued · " + totalUnseen() + " unseen · j/k · e";
+  $("#st-unseen").textContent = totalUnseen();
+}
+function fileRowHTML(){
+  return '<div class="qfile">' + PROJ_ORDER.map(id =>
+    '<button class="fbtn" data-f="' + id + '" style="border-color:' + P[id].color + '55;color:' + P[id].color + '">' +
+    esc(P[id].name.split(" ")[0]) + '</button>').join('') +
+    '<button class="fbtn" data-f="keep">keep unsorted</button></div>';
+}
+function openItem(it, opts){
+  opts = opts || {};
+  it.unseen = false;
+  if (state.unseen[it.proj] > 0) state.unseen[it.proj] = Math.max(0, state.unseen[it.proj] - 1);
+  if (it.kind === "decision"){ openDecision(it.decId); renderQueue(); return; }
+  if (it.kind === "capture"){ it.filing = !it.filing; renderQueue(); return; }
+  // status / blocked / note → jump to the project, flash the log line
+  if (!opts.fromJump && state.sel !== it.proj) pushBack();
+  const flashTs = it.ts;
+  if (state.sel !== it.proj) selectProject(it.proj);
+  state.mode = "brief"; renderCenter(flashTs); renderQueue(); renderMinimap();
+  const line = $("#centerscroll").querySelector('.logline[data-ts="' + flashTs + '"]');
+  if (line) line.scrollIntoView({ block: "center", behavior: "smooth" });
+  if (opts.fromJump) toast("warn", "JUMPED TO ALERT", esc(P[it.proj].name) + " — " + esc(it.t.slice(0, 80)), "Esc returns to where you were");
+}
+function archiveItem(id, silent){
+  const i = state.queue.findIndex(q => q.id === id);
+  if (i < 0) return;
+  const el = $("#queue").querySelector('.qitem[data-id="' + id + '"]');
+  const done = () => { state.queue.splice(state.queue.findIndex(q => q.id === id), 1); renderQueue(); renderMinimap(); };
+  if (el && !silent){ el.classList.add("leaving"); setTimeout(done, 180); } else done();
+}
+function snoozeItem(id){
+  const i = state.queue.findIndex(q => q.id === id);
+  if (i < 0) return;
+  const it = state.queue[i];
+  it.snoozed = true; it.unseen = false;
+  state.queue.splice(i, 1); state.queue.push(it);
+  renderQueue();
+}
+function fileCapture(id, target){
+  const i = state.queue.findIndex(q => q.id === id);
+  if (i < 0) return;
+  const it = state.queue[i];
+  it.filing = false;
+  if (target === "keep"){ renderQueue(); return; }
+  const ts = tick();
+  state.logs[target].push({ ts, agent: null, mode: "note", t: "filed capture: " + it.t });
+  state.queue.splice(i, 1);
+  toast("ok", "FILED", "→ <b>" + esc(P[target].name) + "</b>: " + esc(it.t.slice(0, 70)), null);
+  renderQueue(); if (state.sel === target) renderCenter();
+}
+
+/* ================= capture (workflow 1) ================= */
+$("#capinput").addEventListener("keydown", e => {
+  if (e.key === "Escape"){ e.target.blur(); e.stopPropagation(); return; }
+  if (e.key !== "Enter") return;
+  const v = e.target.value.trim();
+  if (!v) return;
+  const ts = tick();
+  const it = { id: uid(), kind: "capture", proj: null, ts, t: v, unseen: false };
+  state.queue.unshift(it);
+  if (state.qIdx > 0) state.qIdx++;
+  WORLD.captures.unshift({ t: v, ts });
+  e.target.value = "";
+  renderQueue(it.id);
+});
+
+/* ================= CONTRACT 3: simulated agent report ================= */
+function simulateReport(){
+  state.autoFired = true;
+  state.simRun++;
+  const ts = tick();
+  const txt = state.simRun === 4 ? WORLD.incomingReport.t
+    : "Gate-probe run #" + state.simRun + " complete: server pos unchanged after 3 moves — desync confirmed at handshake layer";
+  const ev = { ts, proj: "albion", agent: "packet-tracer", kind: "status", t: txt };
+  WORLD.events.push(ev);
+  const it = { id: uid(), kind: "status", proj: "albion", agent: "packet-tracer", ts, t: txt,
+    unseen: state.sel !== "albion" };
+  state.queue.unshift(it);
+  if (state.qIdx > 0) state.qIdx++;
+  state.logs.albion.push({ ts, agent: "packet-tracer", mode: "add", t: txt });
+  P.albion.agents[0].lastReport = ts; PROG["packet-tracer"] = Math.min(96, (PROG["packet-tracer"] || 60) + 8);
+  if (state.sel !== "albion"){
+    // accumulation restarts for a non-focused project
+    state.unseen.albion++;
+    state.deltas.albion.push("gate-probe run #" + state.simRun + " — desync confirmed at handshake layer");
+    state.visited.albion = state.visited.albion && false;
+    state.age.albion = Math.max(1, Math.min(state.age.albion, 1));
+  }
+  // ping + toast + badge — the main view NEVER changes (Space is the offer to jump)
+  ping("albion", P.albion.color);
+  toast("warn", "PACKET-TRACER · ALBION · " + ts, esc(txt), "Space jumps to it · your view was not moved",
+    () => { pushBack(); openItem(it, { fromJump: true }); });
+  renderQueue(it.id); renderMinimap(); renderTopstats();
+  if (state.sel === "albion" && state.mode === "brief") renderCenter(ts);
+  renderProd();
+}
+$("#simbtn").addEventListener("click", simulateReport);
+setTimeout(() => { if (!state.autoFired) simulateReport(); }, 8000); // one-shot auto-fire
+
+/* ================= top stats / global render ================= */
+function renderTopstats(){
+  const warm = PROJ_ORDER.filter(id => tier(id) === "warm").length;
+  $("#st-warm").textContent = warm;
+  $("#st-dec").textContent = pendingDecCount();
+  $("#st-unseen").textContent = totalUnseen();
+}
+function renderAll(){
+  renderCenter(); renderQueue(); renderProd(); renderMinimap(); renderTopstats(); renderCrumb();
+}
+
+/* ================= keyboard layer (TUI density) ================= */
+document.addEventListener("keydown", e => {
+  const tag = (e.target.tagName || "").toUpperCase();
+  if (tag === "INPUT" || tag === "TEXTAREA") return; // capinput handles its own keys
+  const k = e.key;
+  if (k >= "1" && k <= "4"){ e.preventDefault(); handleDigit(+k); renderAll(); return; }
+  if (k === "0" || k === "Escape"){ e.preventDefault(); goBack(); renderMinimap(); return; }
+  if (k === " "){ e.preventDefault(); jumpToAlert(); return; }
+  if (k === "j" || k === "J"){ e.preventDefault();
+    state.qIdx = Math.min(state.queue.length - 1, state.qIdx + 1); renderQueue(); scrollSel(); return; }
+  if (k === "k" || k === "K"){ e.preventDefault();
+    state.qIdx = Math.max(0, state.qIdx - 1); renderQueue(); scrollSel(); return; }
+  if (k === "e" || k === "E"){ e.preventDefault();
+    const it = state.queue[state.qIdx]; if (it) archiveItem(it.id); return; }
+  if (k === "z" || k === "Z"){ e.preventDefault();
+    const it = state.queue[state.qIdx]; if (it) snoozeItem(it.id); return; }
+  if (k === "o" || k === "O" || k === "Enter"){ e.preventDefault();
+    const it = state.queue[state.qIdx]; if (it) openItem(it); return; }
+  if (k === "c" || k === "C"){ e.preventDefault(); $("#capinput").focus(); return; }
+  if (k === "i" || k === "I"){ e.preventDefault(); cycleIdle(); return; }
+  if (k === "?"){ $("#wfpanel").classList.toggle("open"); return; }
+});
+function scrollSel(){
+  const el = $("#queue").querySelector(".qitem.sel");
+  if (el) el.scrollIntoView({ block: "nearest" });
+}
+
+/* chrome toggles */
+$("#wfbtn").addEventListener("click", () => { $("#wfpanel").classList.toggle("open"); $("#cmppanel").classList.remove("open"); });
+$("#cmpbtn").addEventListener("click", () => { $("#cmppanel").classList.toggle("open"); $("#wfpanel").classList.remove("open"); });
+$("#idlebtn").addEventListener("click", cycleIdle);
+$("#crumb").addEventListener("click", goBack);
+
+/* ================= boot ================= */
+// arriving at albion counts as the first visit: show its delta-first resume
+state.resumeSnap = state.deltas.albion.slice();
+state.resumeAge = ageLabel("albion");
+state.resumeTier = tier("albion");
+state.deltas.albion = [];
+state.unseen.albion = 0;
+state.queue.forEach(q => { if (q.proj === "albion") q.unseen = false; });
+state.visited.albion = true;
+renderAll();
+</script>
+</body>
+</html>

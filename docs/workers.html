@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Commander — Codex Workers</title>
+<style>
+  :root {
+    --bg: #070b08; --panel: #0d130e; --panel2: #111a13;
+    --line: #1d2b20; --line-hi: #3a5540;
+    --txt: #c8d6c9; --dim: #6e8272; --faint: #44543f;
+    --green: #7dff9a; --green-dk: #2f7a44; --amber: #e8b241; --red: #ff5c5c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--txt);
+    font: 15px/1.6 "JetBrains Mono", "Fira Mono", ui-monospace, monospace;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 40px 24px 80px; }
+  h1 { color: var(--green); font-size: 26px; letter-spacing: 1px; margin: 0 0 4px; }
+  .sub { color: var(--dim); font-size: 12.5px; margin-bottom: 36px; }
+  h2 {
+    color: var(--green); font-size: 15px; letter-spacing: 2px; text-transform: uppercase;
+    border-bottom: 1px solid var(--line-hi); padding-bottom: 6px; margin: 44px 0 14px;
+  }
+  h3 { color: var(--amber); font-size: 13.5px; letter-spacing: 1px; margin: 26px 0 8px; }
+  p { margin: 10px 0; }
+  a { color: var(--green); }
+  code {
+    background: var(--panel2); border: 1px solid var(--line);
+    padding: 1px 5px; border-radius: 3px; font-size: 13px; color: var(--txt);
+  }
+  pre {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 4px;
+    padding: 14px 16px; overflow-x: auto; font-size: 13px; line-height: 1.5;
+  }
+  pre code { background: none; border: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; margin: 12px 0; }
+  th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--panel2); color: var(--green); font-weight: normal; letter-spacing: 1px; font-size: 11.5px; text-transform: uppercase; }
+  td code { white-space: nowrap; }
+  .callout {
+    border: 1px solid var(--line-hi); border-left: 3px solid var(--green);
+    background: var(--panel); padding: 10px 14px; border-radius: 3px; margin: 14px 0; font-size: 13.5px;
+  }
+  .warn { border-left-color: var(--amber); }
+  .k { color: var(--amber); }
+  .g { color: var(--green); }
+  .d { color: var(--dim); }
+  img.shot { max-width: 100%; border: 1px solid var(--line-hi); border-radius: 4px; margin: 10px 0; }
+  .toc { font-size: 13px; columns: 2; }
+  .toc a { text-decoration: none; color: var(--txt); }
+  .toc a:hover { color: var(--green); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="wrap">
+
+<h1>🪖 CODEX WORKERS — UNITS THAT DO WORK</h1>
+<div class="sub">commander — RTS context HQ · docs/workers.html · updated 2026-09-02</div>
+
+<p>A <b>unit</b> garrisoned at a base is now a real worker: an OpenAI Codex CLI
+session (<code>codex exec --json</code>) running inside the base's repository.
+The commander <b>dispatches</b> a pylon (task) to a unit; the unit works the
+task, its command/file/message traffic lands on the base's comms wall, and its
+closing status line moves the pylon to <span class="g">done</span> or
+<span class="k">blocked</span>. Follow-up orders <b>resume</b> the unit's codex
+thread, so it keeps its context between turns.</p>
+
+<div class="callout">Nothing about the wasm programs changed — modules are pure
+logic that reads/reduces building state; workers are processes that change
+the world outside the HQ (your repos). Both report into the same event log.</div>
+
+<h2>1 · Base setup: the repo</h2>
+<p>Units work in the base's <code>cwd</code>. A base without one can't dispatch
+(the room shows an amber warning). Set it via the control API — it persists in
+<code>space.jsonl</code>:</p>
+<pre><code>curl "127.0.0.1:7700/base?i=0&amp;cwd=/home/you/albion"
+curl "127.0.0.1:7700/base?i=0&amp;sandbox=danger"          # optional, see below
+curl "127.0.0.1:7700/base?i=0&amp;model=gpt-5.6-sol"       # optional override</code></pre>
+<table>
+<tr><th>field</th><th>meaning</th><th>default</th></tr>
+<tr><td><code>cwd</code></td><td>working root passed to codex (<code>-C</code>); must exist</td><td>none → no workers</td></tr>
+<tr><td><code>sandbox</code></td><td><code>read-only</code> · <code>workspace-write</code> · <code>danger-full-access</code> (alias <code>danger</code>/<code>yolo</code> → <code>--dangerously-bypass-approvals-and-sandbox</code>)</td><td><code>workspace-write</code></td></tr>
+<tr><td><code>model</code></td><td>codex <code>-m</code> override</td><td><code>~/.codex/config.toml</code></td></tr>
+</table>
+<p class="d">Pass an empty value (<code>&amp;model=</code>) to clear a field. Approvals are
+always <code>never</code> in headless mode: anything the sandbox forbids simply fails
+and the unit has to work around it or report BLOCKED.</p>
+<div class="callout warn"><b>workspace-write cannot commit.</b> Codex mounts
+<code>.git</code> read-only inside that sandbox, so a unit told to commit will
+answer <code>BLOCKED: grant write access to .git…</code> (observed on the first
+real run). Either commit yourself once the pylon is done, or set
+<code>sandbox=danger</code> for bases whose repo you trust the unit with.</div>
+
+<h2>2 · Dispatch</h2>
+<p>Enter a pylon's room (2×click the crystal) and hit
+<span class="g">⚙ DISPATCH WORKER</span> or press <span class="k">w</span>.
+Or from the API:</p>
+<pre><code>curl "127.0.0.1:7700/pylon?i=0&amp;title=fix+the+gate+desync"
+curl "127.0.0.1:7700/dispatch?i=0&amp;title=fix+the+gate+desync"            # → {"ok":true,"agent":"cx-1"}
+curl "127.0.0.1:7700/dispatch?i=0&amp;title=...&amp;agent=cx-2&amp;prompt=start+from+packets/"</code></pre>
+<p>Unit choice: the named <code>agent</code>, else the first idle unit, else a
+new one is <b>hired</b> (<code>cx-N</code>). Dispatch always opens a fresh
+codex thread. The pylon goes <span style="color:#5fd7ff">doing</span>, the
+unit goes <b>working</b> (spinning gear in the garrison).</p>
+
+<h3>The standing orders</h3>
+<p>Every dispatched unit gets the same wrapper around its assignment
+(<code>worker::prompt</code>): unit id, base name and goal, the pylon title,
+your optional notes, and one rule — <b>end with exactly one status line</b>:</p>
+<pre><code>DONE: &lt;one-line summary&gt;      → pylon done, unit idle
+BLOCKED: &lt;what you need&gt;      → pylon blocked, unit blocked (⚠ on the map)
+PARTIAL: &lt;what remains&gt;       → pylon stays doing, unit idle — tell it to continue</code></pre>
+<p class="d">No status line at all is treated like PARTIAL.</p>
+
+<h2>3 · Follow-up orders, halting, firing</h2>
+<pre><code>curl "127.0.0.1:7700/tell?i=0&amp;agent=cx-1&amp;s=also+add+a+regression+test"   # resumes the thread
+curl "127.0.0.1:7700/halt?i=0&amp;agent=cx-1"                                     # kill the running turn
+curl "127.0.0.1:7700/fire?i=0&amp;agent=cx-1"                                     # remove the unit</code></pre>
+<p><code>/tell</code> runs <code>codex exec resume &lt;thread_id&gt;</code> in the
+base's repo, so the unit answers with everything it already learned. A blocked
+unit that receives an order goes back to working and its pylon back to doing.
+The room shows <span class="k">■ HALT cx-1</span> while a turn runs and
+<span class="g">⚙ RE-DISPATCH cx-1</span> afterwards (fresh thread, same pylon).</p>
+
+<div class="callout warn">One turn per unit at a time. A unit that was mid-turn
+when commander quit comes back <b>idle</b> on restart (the process is gone);
+its thread id survives, so <code>/tell</code> can pick the work back up.</div>
+
+<h2>4 · What lands on the comms wall</h2>
+<table>
+<tr><th>codex event</th><th>wall entry</th><th>toast?</th></tr>
+<tr><td><code>command_execution</code> completed</td><td><code>$ cargo test ✗ exit 101</code> (first 90 chars)</td><td>no</td></tr>
+<tr><td><code>file_change</code></td><td><code>✎ app.rs, model.rs +3</code></td><td>no</td></tr>
+<tr><td><code>agent_message</code></td><td>first line of the message; full text kept as the unit's <b>last report</b> (shown in the pylon room)</td><td>no</td></tr>
+<tr><td><code>turn.completed</code></td><td><code>✓ DONE: … · 18342 tok</code> / <code>⚠ BLOCKED: …</code> / <code>… PARTIAL: …</code></td><td><b>yes</b></td></tr>
+<tr><td><code>error</code> / <code>turn.failed</code></td><td><code>✗ message</code>; unit + pylon blocked</td><td><b>yes</b></td></tr>
+<tr><td>process exit without a turn</td><td><code>process exited (code …) &lt;last stderr line&gt;</code></td><td><b>yes</b></td></tr>
+</table>
+<p>Quiet entries still ping the base and count as unseen deltas; only the
+turn-level ones interrupt with a toast (or update in place if you're looking at
+the base). The pylon room's <b>related traffic</b> now includes everything its
+unit said, not just lines that mention the pylon title.</p>
+
+<h2>5 · State</h2>
+<pre><code>curl -s 127.0.0.1:7700/state | jq '.workers_running, .projects[0].cwd, .projects[0].agents'
+[
+  {
+    "id": "cx-1", "state": "idle", "task": "fix add() in calc.py …",
+    "blocked_on": null, "running": false,
+    "thread_id": "019a…", "turns": 1, "tokens": 14210,
+    "last_report": "11:05", "last_msg": "…\nDONE: add() now sums; test_calc.py passes"
+  }
+]</code></pre>
+<p><code>tokens</code> is codex's reported input+output per turn summed, cached
+input included — it tracks context size more than spend; the topbar meter is the
+real budget. Persisted per unit in <code>space.jsonl</code>: <code>thread_id</code>,
+<code>last_msg</code>, <code>turns</code>, <code>tokens</code>; per base:
+<code>cwd</code>, <code>sandbox</code>, <code>model</code>.</p>
+
+<h2>6 · Under the hood</h2>
+<p><code>src/worker.rs</code> — <code>Host</code> spawns
+<code>codex exec --json --color never --skip-git-repo-check -C &lt;cwd&gt; -s &lt;sandbox&gt; [-m model] [resume &lt;id&gt;] -</code>
+with the prompt on stdin. A reader thread parses the JSONL
+(<code>thread.started</code>, <code>item.completed</code>, <code>turn.completed</code>,
+<code>turn.failed</code>, <code>error</code>) into <code>worker::Out</code> and
+sends it over a channel; <code>CommanderApp::worker_pump</code> drains it every
+frame next to <code>wasm_pump</code>. Stderr is tailed for the exit report.
+<code>COMMANDER_CODEX</code> overrides the binary (default <code>codex</code> on PATH).</p>
+<p>The subscription meter in the topbar (<code>src/codex.rs</code>) reads the same
+<code>~/.codex/sessions</code> rollouts these workers write, so unit spend shows up
+in the weekly gauge within a minute.</p>
+
+</div>
+</body>
+</html>
