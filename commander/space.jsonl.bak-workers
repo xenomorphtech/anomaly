@@ -1,0 +1,87 @@
+{"t":"prefs","struct_scale":1.5,"show_rail":false}
+{"t":"project","name":"albion","color":[111,179,210],"icon":1,"status":"active","goal":"","agents":[],"tasks":[],"pos":[4604.6826,3356.7888],"modules":[],"questions":[],"last_visit_min":29805773.916666668}
+{"t":"project","name":"anomaly","color":[181,142,224],"icon":2,"status":"active","goal":"","agents":[],"tasks":[],"pos":[4121.31,2921.7068],"modules":[],"questions":[],"last_visit_min":29805773.933333334}
+{"t":"project","name":"maplestory","color":[127,201,138],"icon":3,"status":"active","goal":"","agents":[],"tasks":[],"pos":[4412.2524,3591.254],"modules":[],"questions":[],"last_visit_min":29805773.95}
+{"t":"project","name":"zeus","color":[127,201,138],"icon":3,"status":"active","goal":"","agents":[],"tasks":[],"pos":[4609.2383,3149.6555],"modules":[],"questions":[],"last_visit_min":29805773.916666668}
+{"t":"project","name":"income","color":[210,111,142],"icon":4,"status":"active","goal":"","agents":[],"tasks":[],"pos":[4052.0586,3309.0737],"modules":[],"questions":[],"last_visit_min":29805773.95}
+{"t":"project","name":"slay_the_spire","color":[142,210,201],"icon":5,"status":"active","goal":"","agents":[],"tasks":[],"pos":[4600.397,2945.8477],"modules":[],"questions":[],"last_visit_min":29805773.916666668}
+{"t":"event","ts":"12:41","proj":null,"agent":null,"text":"base destroyed: adsd (record archived)"}
+{"t":"event","ts":"12:41","proj":null,"agent":null,"text":"base destroyed: dfssdfs (record archived)"}
+{"t":"event","ts":"12:41","proj":null,"agent":null,"text":"base destroyed: sdffsd (record archived)"}
+{"t":"event","ts":"23:43","proj":0,"agent":null,"text":"base established: albion"}
+{"t":"event","ts":"23:43","proj":1,"agent":null,"text":"base established: anomaly"}
+{"t":"event","ts":"23:43","proj":2,"agent":null,"text":"base established: maplestory"}
+{"t":"event","ts":"00:12","proj":null,"agent":null,"text":"base destroyed: zeus (record archived)"}
+{"t":"event","ts":"00:13","proj":3,"agent":null,"text":"base established: zeus"}
+{"t":"event","ts":"00:13","proj":4,"agent":null,"text":"base established: income"}
+{"t":"event","ts":"00:13","proj":5,"agent":null,"text":"base established: slay_the_spire"}
+{"t":"event","ts":"05:15","proj":0,"agent":null,"text":"pylon warped in: ship wasm docs"}
+{"t":"event","ts":"05:15","proj":0,"agent":null,"text":"pylon warped in: port modules to rust"}
+{"t":"event","ts":"05:15","proj":0,"agent":null,"text":"sensor array raised: which runtime for gpu tasks?"}
+{"t":"event","ts":"05:15","proj":0,"agent":null,"text":"pylon ship wasm docs → done"}
+{"t":"event","ts":"05:15","proj":0,"agent":null,"text":"question resolved: which runtime for gpu tasks?"}
+{"t":"event","ts":"05:15","proj":0,"agent":null,"text":"question reopened: which runtime for gpu tasks?"}
+{"t":"event","ts":"05:15","proj":0,"agent":null,"text":"question resolved: which runtime for gpu tasks?"}
+{"t":"event","ts":"05:15","proj":0,"agent":null,"text":"question reopened: which runtime for gpu tasks?"}
+{"t":"event","ts":"05:16","proj":0,"agent":null,"text":"pylon ship wasm docs → todo"}
+{"t":"event","ts":"05:16","proj":0,"agent":null,"text":"pylon ship wasm docs → doing"}
+{"t":"event","ts":"05:16","proj":0,"agent":null,"text":"pylon ship wasm docs → done"}
+{"t":"event","ts":"05:16","proj":5,"agent":null,"text":"pylon warped in: warping"}
+{"t":"event","ts":"05:16","proj":5,"agent":null,"text":"sensor array raised: question"}
+{"t":"event","ts":"05:16","proj":0,"agent":null,"text":"question resolved: which runtime for gpu tasks?"}
+{"t":"event","ts":"05:16","proj":0,"agent":null,"text":"question reopened: which runtime for gpu tasks?"}
+{"t":"event","ts":"05:16","proj":0,"agent":null,"text":"question resolved: which runtime for gpu tasks?"}
+{"t":"event","ts":"05:16","proj":0,"agent":null,"text":"question reopened: which runtime for gpu tasks?"}
+{"t":"event","ts":"05:16","proj":0,"agent":null,"text":"question resolved: which runtime for gpu tasks?"}
+{"t":"event","ts":"05:16","proj":5,"agent":null,"text":"question resolved: question"}
+{"t":"event","ts":"05:16","proj":5,"agent":null,"text":"question reopened: question"}
+{"t":"event","ts":"06:07","proj":0,"agent":null,"text":"pylon ship wasm docs → doing"}
+{"t":"event","ts":"06:07","proj":0,"agent":null,"text":"pylon port modules to rust → doing"}
+{"t":"event","ts":"06:09","proj":5,"agent":null,"text":"pylon warping → doing"}
+{"t":"event","ts":"06:09","proj":5,"agent":null,"text":"pylon warping → done"}
+{"t":"event","ts":"06:09","proj":5,"agent":null,"text":"pylon warping → todo"}
+{"t":"event","ts":"06:09","proj":5,"agent":null,"text":"question resolved: question"}
+{"t":"event","ts":"06:09","proj":0,"agent":null,"text":"question reopened: which runtime for gpu tasks?"}
+{"t":"event","ts":"06:09","proj":5,"agent":null,"text":"question reopened: question"}
+{"t":"event","ts":"06:09","proj":5,"agent":null,"text":"question resolved: question"}
+{"t":"event","ts":"06:10","proj":0,"agent":null,"text":"question resolved: which runtime for gpu tasks?"}
+{"t":"event","ts":"06:10","proj":0,"agent":null,"text":"question reopened: which runtime for gpu tasks?"}
+{"t":"event","ts":"06:10","proj":0,"agent":null,"text":"pylon ship wasm docs → todo"}
+{"t":"event","ts":"06:10","proj":0,"agent":null,"text":"pylon ship wasm docs → doing"}
+{"t":"event","ts":"06:10","proj":5,"agent":null,"text":"question reopened: question"}
+{"t":"event","ts":"06:10","proj":5,"agent":null,"text":"pylon warping → doing"}
+{"t":"event","ts":"06:10","proj":0,"agent":null,"text":"pylon port modules to rust → doing"}
+{"t":"event","ts":"06:18","proj":0,"agent":null,"text":"pylon warped in: disposable"}
+{"t":"event","ts":"06:18","proj":0,"agent":null,"text":"pylon demolished: disposable"}
+{"t":"event","ts":"06:19","proj":5,"agent":null,"text":"pylon demolished: warping"}
+{"t":"event","ts":"06:19","proj":0,"agent":null,"text":"pylon demolished: ship wasm docs"}
+{"t":"event","ts":"06:19","proj":5,"agent":null,"text":"sensor array decommissioned: question"}
+{"t":"event","ts":"06:19","proj":0,"agent":null,"text":"sensor array decommissioned: which runtime for gpu tasks?"}
+{"t":"event","ts":"06:19","proj":0,"agent":null,"text":"pylon port modules to rust → done"}
+{"t":"event","ts":"06:19","proj":0,"agent":null,"text":"pylon port modules to rust → todo"}
+{"t":"event","ts":"06:19","proj":0,"agent":null,"text":"pylon port modules to rust → doing"}
+{"t":"event","ts":"06:19","proj":0,"agent":null,"text":"pylon demolished: port modules to rust"}
+{"t":"event","ts":"06:20","proj":2,"agent":null,"text":"pylon warped in: something"}
+{"t":"event","ts":"06:20","proj":2,"agent":null,"text":"pylon something → doing"}
+{"t":"event","ts":"06:20","proj":2,"agent":null,"text":"pylon something → done"}
+{"t":"event","ts":"06:20","proj":2,"agent":null,"text":"pylon something → todo"}
+{"t":"event","ts":"06:20","proj":2,"agent":null,"text":"link established: maplestory ⟷ albion"}
+{"t":"event","ts":"06:20","proj":2,"agent":null,"text":"pylon something → doing"}
+{"t":"event","ts":"06:20","proj":2,"agent":null,"text":"pylon something → done"}
+{"t":"event","ts":"06:20","proj":2,"agent":null,"text":"pylon something → todo"}
+{"t":"event","ts":"06:20","proj":2,"agent":null,"text":"pylon something → doing"}
+{"t":"event","ts":"06:20","proj":2,"agent":null,"text":"pylon something → done"}
+{"t":"event","ts":"06:20","proj":2,"agent":null,"text":"pylon something → todo"}
+{"t":"event","ts":"06:20","proj":2,"agent":null,"text":"pylon something → doing"}
+{"t":"event","ts":"06:20","proj":2,"agent":null,"text":"pylon something → done"}
+{"t":"event","ts":"06:20","proj":2,"agent":null,"text":"pylon something → todo"}
+{"t":"event","ts":"06:20","proj":2,"agent":null,"text":"pylon something → doing"}
+{"t":"event","ts":"06:20","proj":0,"agent":null,"text":"sensor array raised: quest"}
+{"t":"event","ts":"06:20","proj":0,"agent":null,"text":"question resolved: quest"}
+{"t":"event","ts":"06:20","proj":0,"agent":null,"text":"question reopened: quest"}
+{"t":"event","ts":"06:20","proj":0,"agent":null,"text":"question resolved: quest"}
+{"t":"event","ts":"06:20","proj":0,"agent":null,"text":"question reopened: quest"}
+{"t":"event","ts":"06:21","proj":2,"agent":null,"text":"pylon something → done"}
+{"t":"event","ts":"06:21","proj":2,"agent":null,"text":"pylon something → todo"}
+{"t":"event","ts":"06:29","proj":2,"agent":null,"text":"pylon demolished: something"}
+{"t":"event","ts":"06:29","proj":0,"agent":null,"text":"sensor array decommissioned: quest"}

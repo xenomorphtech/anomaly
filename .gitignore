@@ -1,0 +1,5 @@
+# Keep the existing upstream Codex checkout separate from this repository.
+/codex/
+
+# Rust build artifacts for Commander.
+/commander/target/
