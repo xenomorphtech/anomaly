@@ -52,7 +52,7 @@
 <div class="wrap">
 
 <h1>◆ WORLD STRUCTURES</h1>
-<div class="sub">commander — RTS context HQ · docs/structures.html · updated 2026-08-27</div>
+<div class="sub">commander — RTS context HQ · docs/structures.html · updated 2026-09-02</div>
 
 <p>
 Bases are theaters; work lives around them as vector-drawn structures on the map. Every structure
@@ -77,6 +77,7 @@ state is its power level:
 <tr><td><code>todo</code></td><td><span class="d">unpowered grey-blue crystal, slow hover, no field</span></td></tr>
 <tr><td><code>doing</code></td><td><span class="cy">bright cyan, fast bob, glow, pulsing power-field ring on the ground</span></td></tr>
 <tr><td><code>done</code></td><td><span class="gr">calm green, quiet — the goal stands</span></td></tr>
+<tr><td><code>done</code> + <code>unread</code></td><td><span class="gr">a unit reported DONE and nobody has opened the room yet: the crystal emits a slow expanding ring every 3s and keeps its label up at any zoom. Entering the room (or re-dispatching / setting the state by hand) reads it.</span></td></tr>
 <tr><td><code>blocked</code></td><td><span class="rd">red crystal with a flickering alarm ring</span></td></tr>
 </table>
 <p>
@@ -108,6 +109,8 @@ then the second key places at the cursor.
 <tr><td>select a structure</td><td><b>click</b> the pylon or sensor array — pulsing selection brackets; click empty ground or <code>esc</code> deselects</td></tr>
 <tr><td>change its state</td><td><b>double-click</b> into its space and use the state chips (<code>TODO/DOING/DONE/BLOCKED</code>, or <code>SCANNING/RESOLVED</code>); question rows on the base card also toggle on click</td></tr>
 <tr><td>enter a structure's space</td><td><b>double-click</b> the pylon or sensor array — its own interior room: the structure monumental in state color, clickable state chips, and the slice of the event feed that mentions it. <code>esc</code> or double-click the floor exits</td></tr>
+<tr><td>set its effort</td><td>inside the room, the <code>EFFORT</code> chip row: <code>BASE</code> inherits the base's setting, the others pin a codex reasoning effort for units sent to this structure — see <a href="workers.html">workers.html</a></td></tr>
+<tr><td>send a unit</td><td>inside the room, <code>W</code> or the dispatch chip: a pylon gets a <b>worker</b> (⚙), a sensor array gets a <b>scout</b> (⌖) whose answer resolves the question — see <a href="workers.html">workers.html</a></td></tr>
 <tr><td>reposition</td><td>drag the structure; the spot persists</td></tr>
 <tr><td>group select</td><td><b>ctrl+drag</b> a rectangle — every pylon/sensor it touches gets pulsing selection brackets and a count readout; click empty ground or <code>esc</code> clears</td></tr>
 <tr><td>demolish structures</td><td>with a group selected, <code>D</code> <code>D</code> (press twice within 4s) removes them all, logged per structure in the event feed. With no group, <code>D</code> <code>D</code> still destroys the selected base</td></tr>
@@ -146,7 +149,12 @@ curl "localhost:7700/question?i=0&amp;text=which+runtime+for+gpu+tasks%3F"
 # resolve it later
 curl "localhost:7700/question?i=0&amp;text=which+runtime+for+gpu+tasks%3F&amp;resolved=1"
 
-# questions take a brief too (notes=..); reducer ops task/question accept "notes" as well
+# reasoning effort for units sent to a structure (none|minimal|low|medium|high|xhigh|max;
+# empty = the base's /base?effort= default, else ~/.codex/config.toml)
+curl "localhost:7700/pylon?i=0&amp;title=ship+wasm+docs&amp;effort=xhigh"
+curl "localhost:7700/question?i=0&amp;text=which+runtime+for+gpu+tasks%3F&amp;effort=low"
+
+# questions take a brief too (notes=..); reducer ops task/question accept "notes" and "effort" as well
 
 # headless editing of a brief: enter the room, focus the editor, type / paste
 curl "localhost:7700/key?k=Enter"; curl "localhost:7700/text?s=hello"

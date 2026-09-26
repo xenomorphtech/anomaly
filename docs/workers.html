@@ -66,7 +66,9 @@ session (<code>codex exec --json</code>) running inside the base's repository.
 The commander <b>dispatches</b> a pylon (task) to a unit; the unit works the
 task, its command/file/message traffic lands on the base's comms wall, and its
 closing status line moves the pylon to <span class="g">done</span> or
-<span class="k">blocked</span>. Follow-up orders <b>resume</b> the unit's codex
+<span class="k">blocked</span>. A sensor array (question) dispatches a
+<b>scout</b> instead: same unit, research orders, and its DONE line resolves
+the array (see 2). Follow-up orders <b>resume</b> the unit's codex
 thread, so it keeps its context between turns.</p>
 
 <div class="callout">Nothing about the wasm programs changed — modules are pure
@@ -79,14 +81,16 @@ the world outside the HQ (your repos). Both report into the same event log.</div
 <code>space.jsonl</code>:</p>
 <pre><code>curl "127.0.0.1:7700/base?i=0&amp;cwd=/home/you/albion"
 curl "127.0.0.1:7700/base?i=0&amp;sandbox=danger"          # optional, see below
-curl "127.0.0.1:7700/base?i=0&amp;model=gpt-5.6-sol"       # optional override</code></pre>
+curl "127.0.0.1:7700/base?i=0&amp;model=gpt-5.6-sol"       # optional override
+curl "127.0.0.1:7700/base?i=0&amp;effort=medium"            # optional, base-wide default</code></pre>
 <table>
 <tr><th>field</th><th>meaning</th><th>default</th></tr>
 <tr><td><code>cwd</code></td><td>working root passed to codex (<code>-C</code>); must exist</td><td>none → no workers</td></tr>
 <tr><td><code>sandbox</code></td><td><code>read-only</code> · <code>workspace-write</code> · <code>danger-full-access</code> (alias <code>danger</code>/<code>yolo</code> → <code>--dangerously-bypass-approvals-and-sandbox</code>)</td><td><code>workspace-write</code></td></tr>
 <tr><td><code>model</code></td><td>codex <code>-m</code> override</td><td><code>~/.codex/config.toml</code></td></tr>
+<tr><td><code>effort</code></td><td>reasoning effort for every unit of the base: <code>none</code> · <code>minimal</code> · <code>low</code> · <code>medium</code> · <code>high</code> · <code>xhigh</code> · <code>max</code> (passed as <code>-c model_reasoning_effort=..</code>); a pylon / sensor array's own <code>effort</code> overrides it</td><td><code>~/.codex/config.toml</code> <code>model_reasoning_effort</code></td></tr>
 </table>
-<p class="d">Pass an empty value (<code>&amp;model=</code>) to clear a field. Approvals are
+<p class="d">Pass an empty value (<code>&amp;model=</code>, <code>&amp;effort=</code>) to clear a field. Approvals are
 always <code>never</code> in headless mode: anything the sandbox forbids simply fails
 and the unit has to work around it or report BLOCKED.</p>
 <div class="callout warn"><b>workspace-write cannot commit.</b> Codex mounts
@@ -116,6 +120,22 @@ BLOCKED: &lt;what you need&gt;      → pylon blocked, unit blocked (⚠ on the 
 PARTIAL: &lt;what remains&gt;       → pylon stays doing, unit idle — tell it to continue</code></pre>
 <p class="d">No status line at all is treated like PARTIAL.</p>
 
+<h3>Scouting a sensor array</h3>
+<p>A sensor array (question) can be worked the same way: enter its room and hit
+<span class="g">⌖ DISPATCH SCOUT</span> or press <span class="k">w</span>, or
+pass the question text as <code>title</code>:</p>
+<pre><code>curl "127.0.0.1:7700/question?i=0&amp;text=why+does+the+gate+desync"
+curl "127.0.0.1:7700/dispatch?i=0&amp;title=why+does+the+gate+desync"           # → {"ok":true,"agent":"cx-1"}</code></pre>
+<p>A scout gets research orders instead of work orders: investigate and answer,
+don't change the codebase unless the question can't be answered otherwise. Its
+sandbox defaults to <code>read-only</code> (a base <code>sandbox</code> setting
+still wins). The verdict lands on the array, not a pylon:</p>
+<pre><code>DONE: &lt;one-line answer&gt;      → array RESOLVED (✓); the full report is filed into the array's brief
+BLOCKED / PARTIAL             → array keeps scanning; unit blocked / idle as for pylons</code></pre>
+<p class="d">Re-dispatching a resolved array reopens it (it sweeps again). A unit
+remembers which kind of structure it holds (<code>sensor</code> in
+<code>/state</code>), so a pylon and a question with the same name don't collide.</p>
+
 <h2>3 · Follow-up orders, halting, firing</h2>
 <pre><code>curl "127.0.0.1:7700/tell?i=0&amp;agent=cx-1&amp;s=also+add+a+regression+test"   # resumes the thread
 curl "127.0.0.1:7700/halt?i=0&amp;agent=cx-1"                                     # kill the running turn
@@ -125,6 +145,23 @@ base's repo, so the unit answers with everything it already learned. A blocked
 unit that receives an order goes back to working and its pylon back to doing.
 The room shows <span class="k">■ HALT cx-1</span> while a turn runs and
 <span class="g">⚙ RE-DISPATCH cx-1</span> afterwards (fresh thread, same pylon).</p>
+
+<h3>Continuation: brief + last report → next turn</h3>
+<p>Between "start over" (re-dispatch) and "resume the thread" (tell) sits
+<span class="g">↻ CONTINUE cx-1</span> / <span class="k">n</span> in the room, or:</p>
+<pre><code>curl "127.0.0.1:7700/continue?i=0&amp;title=fix+the+gate+desync"                       # brief + last report
+curl "127.0.0.1:7700/continue?i=0&amp;title=...&amp;s=now+cover+the+resume+path"          # + a commander note</code></pre>
+<p>It is a normal dispatch (fresh thread, same unit, pylon → doing) whose prompt
+carries the structure's <b>current brief</b> — edit it in the room first if the
+goal moved — plus the unit's <b>last report</b> under a
+<code>CONTINUATION</code> heading that tells the new turn to verify what was
+reported done and carry on from there. Use it after a <code>PARTIAL</code>, or
+when a <code>DONE</code> turns out to need a second pass; it needs a previous
+report to start from, so a never-dispatched pylon refuses it.</p>
+
+<p>A pylon whose unit reported <code>DONE</code> while you were elsewhere keeps
+<b>pulsing on the map</b> (slow green ring every 3s, label always shown) until
+you open its room — <code>tasks[].unread</code> in <code>/state</code>.</p>
 
 <div class="callout warn">One turn per unit at a time. A unit that was mid-turn
 when commander quit comes back <b>idle</b> on restart (the process is gone);
@@ -159,11 +196,13 @@ unit said, not just lines that mention the pylon title.</p>
 input included — it tracks context size more than spend; the topbar meter is the
 real budget. Persisted per unit in <code>space.jsonl</code>: <code>thread_id</code>,
 <code>last_msg</code>, <code>turns</code>, <code>tokens</code>; per base:
-<code>cwd</code>, <code>sandbox</code>, <code>model</code>.</p>
+<code>cwd</code>, <code>sandbox</code>, <code>model</code>, <code>effort</code>; per pylon /
+sensor array: <code>effort</code>. A unit remembers the effort it was dispatched with
+(<code>effort</code> in <code>/state</code> agents) and follow-up orders reuse it.</p>
 
 <h2>6 · Under the hood</h2>
 <p><code>src/worker.rs</code> — <code>Host</code> spawns
-<code>codex exec --json --color never --skip-git-repo-check -C &lt;cwd&gt; -s &lt;sandbox&gt; [-m model] [resume &lt;id&gt;] -</code>
+<code>codex exec --json --color never --skip-git-repo-check -C &lt;cwd&gt; -s &lt;sandbox&gt; [-m model] [-c model_reasoning_effort="&lt;effort&gt;"] [resume &lt;id&gt;] -</code>
 with the prompt on stdin. A reader thread parses the JSONL
 (<code>thread.started</code>, <code>item.completed</code>, <code>turn.completed</code>,
 <code>turn.failed</code>, <code>error</code>) into <code>worker::Out</code> and
