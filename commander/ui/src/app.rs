@@ -292,7 +292,7 @@ pub struct CommanderApp {
 }
 
 impl CommanderApp {
-    pub fn new(cc: &eframe::CreationContext<'_>, ctrl: Receiver<CtrlReq>, api: api::Client) -> Self {
+    pub fn new(ctx: &egui::Context, ctrl: Receiver<CtrlReq>, api: api::Client) -> Self {
         let mut v = egui::Visuals::dark();
         v.panel_fill = PANEL;
         v.window_fill = Color32::from_rgb(0x0f, 0x18, 0x10);
@@ -308,14 +308,14 @@ impl CommanderApp {
         v.widgets.hovered.bg_stroke.color = GREEN_DK;
         v.widgets.active.bg_fill = Color32::from_rgb(0x22, 0x33, 0x25);
         v.selection.bg_fill = a(GREEN_DK, 120);
-        cc.egui_ctx.set_visuals(v);
+        ctx.set_visuals(v);
 
         let icons_tex = match image::load_from_memory(include_bytes!("../../strategy_building.jpeg")) {
             Ok(img) => {
                 let img = img.to_rgba8();
                 let size = [img.width() as usize, img.height() as usize];
                 let cimg = egui::ColorImage::from_rgba_unmultiplied(size, img.as_raw());
-                Some(cc.egui_ctx.load_texture("building_icons", cimg, egui::TextureOptions::LINEAR))
+                Some(ctx.load_texture("building_icons", cimg, egui::TextureOptions::LINEAR))
             }
             Err(e) => {
                 eprintln!("failed to load strategy_building.jpeg: {e}");

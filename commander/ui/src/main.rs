@@ -1,15 +1,20 @@
 //! commander — the Commander frontend.
 //!
-//! A view onto one daemon (`commanderd`). Env:
-//!   COMMANDER_API      daemon url (default http://127.0.0.1:7700)
+//! A view onto one daemon (`commanderd`). It opens on a connect screen
+//! prefilled with the last address used (saved in the user's config dir, see
+//! `settings`). Env:
+//!   COMMANDER_API      daemon url; when set, connects to it right away
 //!   COMMANDER_UI_HTTP  this frontend's control api (default 127.0.0.1:7701)
 //!   COMMANDER_SPAWN=0  never start a daemon when none answers
-//! When no daemon answers, one is started detached (it outlives this window)
-//! with COMMANDER_HTTP set from COMMANDER_API; COMMANDER_SPACE passes through.
+//! When the address is local and no daemon answers, one is started detached
+//! (it outlives this window) with COMMANDER_HTTP set from the address;
+//! COMMANDER_SPACE passes through.
 
 mod api;
 mod app;
+mod connect;
 mod ctrl;
+mod settings;
 
 fn main() -> eframe::Result {
     // the app usually runs inside a nested weston whose clipboard is isolated
@@ -21,15 +26,12 @@ fn main() -> eframe::Result {
         let host = std::env::var_os("COMMANDER_HOST_DISPLAY").unwrap_or_else(|| ":0".into());
         std::env::set_var("DISPLAY", host);
     }
-    let backend = std::env::var("COMMANDER_API").unwrap_or_else(|_| "http://127.0.0.1:7700".into());
-    let backend = backend.trim_end_matches('/').to_string();
+    let env_api = std::env::var("COMMANDER_API").ok().filter(|v| !v.trim().is_empty());
+    let auto = env_api.is_some();
+    let saved = settings::load().api;
+    let addr = env_api.unwrap_or(if saved.is_empty() { settings::DEFAULT_API.into() } else { saved });
     let spawn = std::env::var("COMMANDER_SPAWN").map_or(true, |v| v != "0");
-    if !api::ensure_daemon(&backend, spawn) {
-        eprintln!("no daemon at {} — the view stays empty until one answers", backend);
-    }
     let ui_addr = std::env::var("COMMANDER_UI_HTTP").unwrap_or_else(|_| "127.0.0.1:7701".into());
-    let ctrl_rx = ctrl::spawn(ui_addr, backend.clone());
-    let client = api::Client::connect(backend);
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([1500.0, 900.0])
@@ -39,6 +41,6 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "commander-poc",
         options,
-        Box::new(|cc| Ok(Box::new(app::CommanderApp::new(cc, ctrl_rx, client)))),
+        Box::new(move |cc| Ok(Box::new(connect::ConnectApp::new(cc, addr, ui_addr, spawn, auto)))),
     )
 }
