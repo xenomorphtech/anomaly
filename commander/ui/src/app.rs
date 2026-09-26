@@ -4,8 +4,12 @@ use eframe::egui::{
     StrokeKind, TopBottomPanel, pos2, vec2,
 };
 
-use crate::ctrl::{Cmd, CtrlReq};
-use crate::model::*;
+use crate::api::{self, Reply, Req};
+use crate::ctrl::{CtrlReq, UiCmd};
+use commander_core::model::*;
+use commander_core::proto::{ModStatus, Snapshot, Target, Usage};
+use commander_core::store::Prefs;
+use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::Receiver;
 
 // ---------- palette ----------
@@ -33,7 +37,6 @@ const ICON_SHEET_W: f32 = 735.0;
 const ICON_SHEET_H: f32 = 1200.0;
 const ICON_COL_EDGES: [f32; 9] = [61.5, 138.0, 214.5, 291.5, 368.0, 445.0, 521.5, 598.0, 673.5];
 const ICON_ROW_EDGES: [f32; 4] = [426.0, 494.0, 570.0, 645.0];
-pub const ICON_COUNT: usize = 24; // 3 rows x 8 cols
 
 fn icon_uv(idx: usize) -> Rect {
     let idx = idx % ICON_COUNT;
@@ -53,6 +56,24 @@ fn icon_uv(idx: usize) -> Rect {
 
 fn a(c: Color32, alpha: u8) -> Color32 {
     Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), alpha)
+}
+
+fn rgb(c: Rgb) -> Color32 {
+    Color32::from_rgb(c[0], c[1], c[2])
+}
+
+/// "6d 23h" / "23h 12m" / "55m" until the codex window resets
+fn codex_eta(resets_at: i64) -> String {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let s = (resets_at - now).max(0);
+    let (d, h, m) = (s / 86400, (s % 86400) / 3600, (s % 3600) / 60);
+    if d > 0 {
+        format!("{}d {}h", d, h)
+    } else if h > 0 {
+        format!("{}h {}m", h, m)
+    } else {
+        format!("{}m", m)
+    }
 }
 
 struct Camera {
@@ -84,6 +105,15 @@ enum SRoom {
     Question(usize, usize), // (proj, question index)
 }
 
+impl SRoom {
+    fn target(self) -> (usize, Target) {
+        match self {
+            SRoom::Pylon(pi, ti) => (pi, Target::Pylon(ti)),
+            SRoom::Question(pi, qi) => (pi, Target::Question(qi)),
+        }
+    }
+}
+
 #[derive(Clone)]
 enum Act {
     Focus { proj: usize, scale: f32, from_space: bool },
@@ -107,12 +137,16 @@ enum Act {
     CommitPylon(String),
     SetPylon(usize, usize, TaskState),
     /// send a unit to work pylon (proj, task) via codex
-    Dispatch(usize, usize),
+    Dispatch(SRoom),
+    /// re-dispatch with the last report folded into the prompt (fresh thread)
+    Continue(SRoom),
     HaltUnit(usize, String),
     PlaceQuestion(Pos2),
     CommitQuestion(String),
     ToggleQuestion(usize, usize),
     SetQuestion(usize, usize, bool),
+    /// effort chip inside a pylon / sensor room (None = base default)
+    SetEffort(SRoom, Option<String>),
     DestroyStructs,
     StartLink,
     ToggleLink(usize, usize),
@@ -136,15 +170,64 @@ enum ClickZone {
     Question(usize, usize), // (proj, question index)
     SetTask(usize, usize, TaskState), // state chip inside a pylon room
     SetQuest(usize, usize, bool),     // resolve chip inside a question room
-    Dispatch(usize, usize),           // "dispatch worker" chip inside a pylon room
+    SetEffort(SRoom, Option<String>), // effort chip inside a pylon / sensor room
+    Dispatch(SRoom),                  // "dispatch" chip inside a pylon / sensor room
+    Continue(SRoom),                  // "continue" chip: brief + last report → new turn
     HaltUnit(usize, String),          // "halt" chip for the unit working a pylon
     RailToggle,                       // show/hide the base enumeration rail
     ExitInterior,
 }
 
+/// what the card showed the last time the commander walked into a base: the
+/// delta that was waiting, frozen at that moment (this frontend's own memory)
+#[derive(Clone, Default)]
+struct Shown {
+    lines: Vec<String>,
+    age_min: f64,
+    age: String,
+}
+
+/// a local edit applied on top of every incoming snapshot until the daemon's
+/// snapshot that carries it arrives (`settle` = that version, once known)
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum OverlayKey {
+    Base(usize),
+    Capture(usize),
+    Struct(usize, Target),
+    Notes(usize, Target),
+    Scale,
+}
+
+enum OverlayVal {
+    Pos((f32, f32)),
+    Text(String),
+    Scale(f32),
+}
+
+struct Overlay {
+    val: OverlayVal,
+    settle: Option<u64>,
+}
+
 pub struct CommanderApp {
+    /// mirror of the daemon's world (the last snapshot + local overlays)
     world: World,
     rt: Vec<Rt>,
+    shown: Vec<Shown>,
+    version: u64,
+    synced: bool,
+    api: api::Client,
+    overlays: HashMap<OverlayKey, Overlay>,
+    /// brief edits wait a moment before they are sent (room, last edit time)
+    notes_due: Option<(SRoom, f64)>,
+    scale_due: Option<f64>,
+    /// a base this frontend established: focus it once the snapshot has it
+    pending_focus: Option<usize>,
+    last_notice: u64,
+    mod_status: HashMap<(String, String), ModStatus>,
+    running: HashSet<(String, String)>,
+    codex: Option<Usage>,
+    space_path: String,
     cam: Camera,
     sel: Option<usize>,
     interior: Option<usize>,
@@ -186,8 +269,7 @@ pub struct CommanderApp {
     drag_quest: Option<(usize, usize)>,
     build_menu: bool,
     sroom: Option<SRoom>,
-    prefs: crate::store::Prefs,
-    codex: crate::codex::Shared,    // codex subscription usage (supply counter)
+    prefs: Prefs,
     sel_structs: Vec<SRoom>,        // group-selected substructures (ctrl+drag band)
     band: Option<(Pos2, Pos2)>,     // in-progress ctrl+drag selection rectangle (screen)
     sdestroy_arm: Option<f64>,      // time D was pressed with a structure group selected
@@ -207,18 +289,10 @@ pub struct CommanderApp {
     acts: Vec<Act>,
     ctrl: Receiver<CtrlReq>,
     icons_tex: Option<egui::TextureHandle>,
-    space_path: String,
-    dirty: bool,
-    last_save: f64,
-    wasm: crate::wasm::Host,
-    mod_status: std::collections::HashMap<(String, String), crate::wasm::ModStatus>,
-    last_wasm_sync: f64,
-    /// codex worker processes (one turn per unit at a time)
-    workers: crate::worker::Host,
 }
 
 impl CommanderApp {
-    pub fn new(cc: &eframe::CreationContext<'_>, ctrl: Receiver<CtrlReq>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, ctrl: Receiver<CtrlReq>, api: api::Client) -> Self {
         let mut v = egui::Visuals::dark();
         v.panel_fill = PANEL;
         v.window_fill = Color32::from_rgb(0x0f, 0x18, 0x10);
@@ -236,7 +310,7 @@ impl CommanderApp {
         v.selection.bg_fill = a(GREEN_DK, 120);
         cc.egui_ctx.set_visuals(v);
 
-        let icons_tex = match image::load_from_memory(include_bytes!("../strategy_building.jpeg")) {
+        let icons_tex = match image::load_from_memory(include_bytes!("../../strategy_building.jpeg")) {
             Ok(img) => {
                 let img = img.to_rgba8();
                 let size = [img.width() as usize, img.height() as usize];
@@ -249,31 +323,22 @@ impl CommanderApp {
             }
         };
 
-        let space_path = crate::store::path();
-        let (world, rt, prefs) = match crate::store::load(&space_path) {
-            Some((mut world, visits, prefs)) => {
-                // a unit that was mid-turn when we last quit lost its process
-                for p in world.projects.iter_mut() {
-                    for ag in p.agents.iter_mut() {
-                        if ag.state == AgentState::Working {
-                            ag.state = AgentState::Idle;
-                        }
-                    }
-                }
-                eprintln!("loaded space from {} ({} bases)", space_path, world.projects.len());
-                let now = now_min();
-                let rt = visits.iter().map(|&v| new_rt(if v > 0.0 { v } else { now })).collect();
-                (world, rt, prefs)
-            }
-            None => {
-                let world = initial_world();
-                let rt = initial_rt(&world);
-                (world, rt, crate::store::Prefs::default())
-            }
-        };
         CommanderApp {
-            world,
-            rt,
+            world: World::default(),
+            rt: vec![],
+            shown: vec![],
+            version: 0,
+            synced: false,
+            api,
+            overlays: HashMap::new(),
+            notes_due: None,
+            scale_due: None,
+            pending_focus: None,
+            last_notice: 0,
+            mod_status: HashMap::new(),
+            running: HashSet::new(),
+            codex: None,
+            space_path: String::new(),
             cam: Camera {
                 pos: pos2(WW / 2.0, WH / 2.0),
                 scale: 0.45,
@@ -335,27 +400,11 @@ impl CommanderApp {
             acts: vec![],
             ctrl,
             icons_tex,
-            space_path,
-            dirty: false,
-            last_save: 0.0,
-            wasm: crate::wasm::Host::spawn(),
-            workers: crate::worker::Host::spawn(),
-            mod_status: std::collections::HashMap::new(),
-            last_wasm_sync: -10.0,
-            prefs,
-            codex: crate::codex::spawn(),
+            prefs: Prefs::default(),
             sel_structs: vec![],
             band: None,
             sdestroy_arm: None,
         }
-    }
-
-    fn save_space(&mut self) {
-        if let Err(e) = crate::store::save(&self.space_path, &self.world, &self.rt, &self.prefs) {
-            eprintln!("failed to save {}: {}", self.space_path, e);
-        }
-        self.dirty = false;
-        self.last_save = self.time;
     }
 
     // ---------- time / formatting ----------
@@ -408,7 +457,9 @@ impl CommanderApp {
             match hit {
                 Some(ClickZone::SetTask(pi, ti, st)) => self.acts.push(Act::SetPylon(pi, ti, st)),
                 Some(ClickZone::SetQuest(pi, qi, r)) => self.acts.push(Act::SetQuestion(pi, qi, r)),
-                Some(ClickZone::Dispatch(pi, ti)) => self.acts.push(Act::Dispatch(pi, ti)),
+                Some(ClickZone::SetEffort(room, e)) => self.acts.push(Act::SetEffort(room, e)),
+                Some(ClickZone::Dispatch(room)) => self.acts.push(Act::Dispatch(room)),
+                Some(ClickZone::Continue(room)) => self.acts.push(Act::Continue(room)),
                 Some(ClickZone::HaltUnit(pi, aid)) => self.acts.push(Act::HaltUnit(pi, aid)),
                 Some(ClickZone::ExitInterior) => self.sroom = None,
                 _ => {
@@ -436,8 +487,8 @@ impl CommanderApp {
         if double {
             match hit {
                 Some(ClickZone::FocusBase(i)) => self.acts.push(Act::EnterInterior(i)),
-                Some(ClickZone::Pylon(pi, ti)) => self.sroom = Some(SRoom::Pylon(pi, ti)),
-                Some(ClickZone::Question(pi, qi)) => self.sroom = Some(SRoom::Question(pi, qi)),
+                Some(ClickZone::Pylon(pi, ti)) => self.enter_room(SRoom::Pylon(pi, ti)),
+                Some(ClickZone::Question(pi, qi)) => self.enter_room(SRoom::Question(pi, qi)),
                 Some(ClickZone::RailToggle) => {}
                 None => {
                     let wp = self.screen_to_world(p);
@@ -468,11 +519,11 @@ impl CommanderApp {
                     self.sdestroy_arm = None;
                     self.sel = None;
                 }
-                Some(ClickZone::SetTask(..)) | Some(ClickZone::SetQuest(..)) => {}
-                Some(ClickZone::Dispatch(..)) | Some(ClickZone::HaltUnit(..)) => {}
+                Some(ClickZone::SetTask(..)) | Some(ClickZone::SetQuest(..)) | Some(ClickZone::SetEffort(..)) => {}
+                Some(ClickZone::Dispatch(..)) | Some(ClickZone::Continue(..)) | Some(ClickZone::HaltUnit(..)) => {}
                 Some(ClickZone::RailToggle) => {
                     self.prefs.show_rail = !self.prefs.show_rail;
-                    self.dirty = true;
+                    self.api.send(Req::Cfg { struct_scale: None, show_rail: Some(self.prefs.show_rail) });
                 }
                 Some(ClickZone::ExitInterior) => {}
                 None => {
@@ -480,6 +531,24 @@ impl CommanderApp {
                     self.link_from = None;
                     self.sel_structs.clear();
                     self.sdestroy_arm = None;
+                }
+            }
+        }
+    }
+
+    /// walk into a structure's room. the map selection that the entering
+    /// double-click left behind is dropped here, so esc leaves the room on the
+    /// first press instead of first clearing a selection nobody can see; a
+    /// pylon whose finished report was waiting to be read stops pulsing.
+    fn enter_room(&mut self, room: SRoom) {
+        self.sroom = Some(room);
+        self.sel_structs.clear();
+        self.sdestroy_arm = None;
+        if let SRoom::Pylon(pi, ti) = room {
+            if let Some(t) = self.world.projects.get_mut(pi).and_then(|p| p.tasks.get_mut(ti)) {
+                if t.unread {
+                    t.unread = false;
+                    self.api.send(Req::edit(pi, Target::Pylon(ti)).read());
                 }
             }
         }
@@ -517,20 +586,28 @@ impl CommanderApp {
         self.cam.target_pos = pos2((min.x + max.x) / 2.0, (min.y + max.y) / 2.0);
         self.cam.target_scale = s;
     }
+    /// the commander looks at base i: what was waiting becomes the card's
+    /// resume header (fresh visit), the delta is consumed, the daemon is told
     fn visit(&mut self, i: usize, fresh: bool) {
+        if i >= self.rt.len() {
+            return;
+        }
         if fresh {
             let age = self.age_min(i);
-            let rt = &mut self.rt[i];
-            rt.shown = rt.delta.clone();
-            rt.shown_age_min = age;
-            rt.shown_age = fmt_age(age);
+            if self.shown.len() <= i {
+                self.shown.resize_with(i + 1, Shown::default);
+            }
+            let sh = &mut self.shown[i];
+            sh.lines = self.rt[i].delta.clone();
+            sh.age_min = age;
+            sh.age = fmt_age(age);
         }
         let rt = &mut self.rt[i];
         rt.delta.clear();
         rt.unseen_events = 0;
         rt.last_visit_min = self.now_min;
         self.unseen.retain(|&p| p != i);
-        self.dirty = true;
+        self.api.send(Req::Visit { i });
     }
     fn focus(&mut self, i: usize, scale: f32, from_space: bool) {
         if i >= self.world.projects.len() {
@@ -600,237 +677,11 @@ impl CommanderApp {
         });
     }
     fn ping(&mut self, proj: usize) {
-        let color = self.world.projects[proj].color;
+        let color = rgb(self.world.projects[proj].color);
         self.wpings.push(Ping { proj, color, created: self.time });
         self.mpings.push(Ping { proj, color, created: self.time });
     }
 
-    /// ingest an agent report into the world (event log, staleness deltas, pings, toasts)
-    fn report(&mut self, proj: usize, agent: Option<&str>, text: &str) {
-        self.report_ex(proj, agent, text, true);
-    }
-
-    /// quiet variant: event log + ping + delta, no toast (routine worker traffic)
-    fn report_quiet(&mut self, proj: usize, agent: Option<&str>, text: &str) {
-        self.report_ex(proj, agent, text, false);
-    }
-
-    fn report_ex(&mut self, proj: usize, agent: Option<&str>, text: &str, loud: bool) {
-        if proj >= self.world.projects.len() {
-            return;
-        }
-        let ts = self.clock();
-        self.world.events.push(Event {
-            ts: ts.clone(),
-            proj: Some(proj),
-            agent: agent.map(String::from),
-            text: text.into(),
-        });
-        if let Some(aid) = agent {
-            if let Some(ag) = self.world.projects[proj].agents.iter_mut().find(|a| a.id == aid) {
-                ag.last_report = ts.clone();
-            }
-        }
-        self.ping(proj);
-        self.dirty = true;
-        let who = agent.map(String::from).unwrap_or_else(|| self.world.projects[proj].name.clone());
-        if self.sel == Some(proj) {
-            // focused project: update in place, never steal focus
-            self.rt[proj].last_visit_min = self.now_min;
-            if !loud {
-                return;
-            }
-            self.toast(
-                &format!("📡 {} · {}", who, ts),
-                text,
-                "in current view — updated in place",
-                true,
-                Some(proj),
-            );
-        } else {
-            self.rt[proj].delta.push(format!("{}: {} ({})", who, text, ts));
-            self.rt[proj].unseen_events += 1;
-            self.unseen.push(proj);
-            if !loud {
-                return;
-            }
-            self.toast(
-                &format!("📡 {} · {}", who, ts),
-                text,
-                "SPACE jumps to it · click this toast",
-                false,
-                Some(proj),
-            );
-        }
-    }
-
-    // ---------- wasm module host ----------
-
-    fn proj_by_name(&self, name: &str) -> Option<usize> {
-        self.world.projects.iter().position(|p| p.name == name)
-    }
-
-    /// push fresh building snapshots to the wasm runtime thread
-    fn wasm_sync(&mut self) {
-        let buildings = self
-            .world
-            .projects
-            .iter()
-            .map(|p| crate::wasm::Building {
-                name: p.name.clone(),
-                state_json: serde_json::to_string(p).unwrap_or_default(),
-                modules: p.modules.clone(),
-            })
-            .collect();
-        self.wasm.sync(buildings);
-        self.last_wasm_sync = self.time;
-    }
-
-    /// drain module outputs: signals feed the event log, reducers mutate state
-    fn wasm_pump(&mut self) {
-        use crate::wasm::Out;
-        for out in self.wasm.drain() {
-            match out {
-                Out::Signal { proj, module, text } => {
-                    if let Some(i) = self.proj_by_name(&proj) {
-                        self.report(i, Some(&format!("⚙{}", module)), &text);
-                    }
-                }
-                Out::Reduce { proj, module, cmd } => {
-                    if let Some(i) = self.proj_by_name(&proj) {
-                        self.apply_wasm_reduce(i, &module, &cmd);
-                    }
-                }
-                Out::Log { proj, module, text } => {
-                    eprintln!("[wasm {}/{}] {}", proj, module, text);
-                    self.mod_status.entry((proj, module)).or_default().last_log = Some(text);
-                }
-                Out::Ran { proj, module, fuel_used, http_used, ms, error } => {
-                    if let Some(e) = &error {
-                        eprintln!("[wasm {}/{}] tick error: {}", proj, module, e);
-                    }
-                    let st = self.mod_status.entry((proj, module)).or_default();
-                    st.ticks += 1;
-                    st.fuel_used = fuel_used;
-                    st.http_used = http_used;
-                    st.ms = ms;
-                    st.error = error;
-                }
-            }
-        }
-    }
-
-    /// apply one reducer command from a module to building i's state
-    fn apply_wasm_reduce(&mut self, i: usize, module: &str, cmd: &serde_json::Value) {
-        let s = |k: &str| cmd.get(k).and_then(|v| v.as_str()).map(String::from);
-        let op = s("op").unwrap_or_default();
-        let ts = self.clock();
-        let p = &mut self.world.projects[i];
-        match op.as_str() {
-            "status" => {
-                if let Some(v) = s("value") {
-                    p.status = v;
-                }
-            }
-            "goal" => {
-                if let Some(v) = s("value") {
-                    p.goal = v;
-                }
-            }
-            "task" => {
-                let pos = match (cmd.get("x").and_then(|v| v.as_f64()), cmd.get("y").and_then(|v| v.as_f64())) {
-                    (Some(x), Some(y)) => Some((x as f32, y as f32)),
-                    _ => None,
-                };
-                let notes = s("notes");
-                if let (Some(title), Some(state)) = (s("title"), s("state").as_deref().and_then(TaskState::parse)) {
-                    match p.tasks.iter_mut().find(|t| t.title == title) {
-                        Some(t) => {
-                            t.state = state;
-                            if pos.is_some() {
-                                t.pos = pos;
-                            }
-                            if let Some(n) = notes {
-                                t.notes = n;
-                            }
-                        }
-                        None => p.tasks.push(Task { title, state, pos, notes: notes.unwrap_or_default() }),
-                    }
-                }
-            }
-            "task_remove" => {
-                if let Some(title) = s("title") {
-                    p.tasks.retain(|t| t.title != title);
-                }
-            }
-            "question" => {
-                let pos = match (cmd.get("x").and_then(|v| v.as_f64()), cmd.get("y").and_then(|v| v.as_f64())) {
-                    (Some(x), Some(y)) => Some((x as f32, y as f32)),
-                    _ => None,
-                };
-                let resolved = cmd.get("resolved").and_then(|v| v.as_bool());
-                let notes = s("notes");
-                if let Some(text) = s("text") {
-                    match p.questions.iter_mut().find(|q| q.text == text) {
-                        Some(q) => {
-                            if let Some(r) = resolved {
-                                q.resolved = r;
-                            }
-                            if pos.is_some() {
-                                q.pos = pos;
-                            }
-                            if let Some(n) = notes {
-                                q.notes = n;
-                            }
-                        }
-                        None => p.questions.push(Question { text, resolved: resolved.unwrap_or(false), pos, notes: notes.unwrap_or_default() }),
-                    }
-                }
-            }
-            "question_remove" => {
-                if let Some(text) = s("text") {
-                    p.questions.retain(|q| q.text != text);
-                }
-            }
-            "agent" => {
-                if let Some(id) = s("id") {
-                    let state = s("state").as_deref().and_then(AgentState::parse);
-                    match p.agents.iter_mut().find(|a| a.id == id) {
-                        Some(a) => {
-                            if let Some(st) = state {
-                                a.state = st;
-                            }
-                            if let Some(t) = s("task") {
-                                a.task = t;
-                            }
-                            if let Some(b) = s("blocked_on") {
-                                a.blocked_on = Some(b);
-                            }
-                            a.last_report = ts;
-                        }
-                        None => {
-                            let mut ag = Agent::new(id);
-                            ag.state = state.unwrap_or(AgentState::Idle);
-                            ag.task = s("task").unwrap_or_default();
-                            ag.last_report = ts;
-                            ag.blocked_on = s("blocked_on");
-                            p.agents.push(ag);
-                        }
-                    }
-                }
-            }
-            "agent_remove" => {
-                if let Some(id) = s("id") {
-                    p.agents.retain(|a| a.id != id);
-                }
-            }
-            other => {
-                eprintln!("[wasm {}/{}] unknown reduce op '{}'", p.name, module, other);
-                return;
-            }
-        }
-        self.dirty = true;
-    }
 
     fn idle_agents(&self) -> Vec<(usize, String)> {
         let mut out = vec![];
@@ -844,171 +695,6 @@ impl CommanderApp {
         out
     }
 
-    fn commit_decision(&mut self, di: usize, oi: usize) {
-        if self.world.decisions[di].resolved {
-            return;
-        }
-        let ts = self.clock();
-        let chosen = self.world.decisions[di].options[oi].clone();
-        let name = chosen.split(':').next().unwrap_or(&chosen).to_string();
-        let proj = self.world.decisions[di].proj;
-        let title = self.world.decisions[di].title.clone();
-        let dec_id = self.world.decisions[di].id.clone();
-        self.world.decisions[di].resolved = true;
-        self.world.decisions[di].chosen = Some(chosen);
-        self.world.events.push(Event {
-            ts: ts.clone(),
-            proj: Some(proj),
-            agent: None,
-            text: format!("DECIDED: {} → {}", title, name),
-        });
-        // release any agents holding on this decision
-        let mut released = vec![];
-        for ag in self.world.projects[proj].agents.iter_mut() {
-            if ag.blocked_on.as_deref() == Some(dec_id.as_str()) {
-                ag.state = AgentState::Working;
-                ag.blocked_on = None;
-                ag.last_report = ts.clone();
-                released.push(ag.id.clone());
-            }
-        }
-        for aid in &released {
-            self.world.events.push(Event {
-                ts: ts.clone(),
-                proj: Some(proj),
-                agent: Some(aid.clone()),
-                text: format!("Unblocked — resuming with {} strategy", name.to_lowercase()),
-            });
-        }
-        let sub = if released.is_empty() {
-            String::new()
-        } else {
-            format!("{} released · minimap marker cleared", released.join(", "))
-        };
-        self.toast(
-            &format!("✓ ORDER COMMITTED · {}", ts),
-            &format!("{} → {}", title, name),
-            &sub,
-            true,
-            Some(proj),
-        );
-        self.ping(proj);
-        self.dirty = true;
-        self.idle_idx = usize::MAX;
-        self.briefing = None;
-    }
-
-    /// demolish base i: archive its record and history to disk, then remove it
-    /// from the world, shifting every live project index above i down by one
-    fn destroy_base(&mut self, i: usize) {
-        if i >= self.world.projects.len() {
-            return;
-        }
-        let ts = self.clock();
-        let name = self.world.projects[i].name.clone();
-
-        // archive first — the base is only demolished once its record is safely on disk
-        let rec = crate::store::ArchivedBase {
-            t: "archived_base",
-            ts: ts.clone(),
-            project: self.world.projects[i].clone(),
-            last_visit_min: self.rt[i].last_visit_min,
-            decisions: self.world.decisions.iter().filter(|d| d.proj == i).cloned().collect(),
-            events: self.world.events.iter().filter(|e| e.proj == Some(i)).cloned().collect(),
-        };
-        let apath = crate::store::archive_path(&self.space_path);
-        if let Err(e) = crate::store::append_archive(&apath, &rec) {
-            self.toast("💥 DESTROY ABORTED", &format!("could not archive {}: {}", name, e), "the base still stands", false, Some(i));
-            self.destroy_arm = None;
-            return;
-        }
-
-        // remove the base and every record tied to it
-        self.world.projects.remove(i);
-        self.rt.remove(i);
-        self.world.decisions.retain(|d| d.proj != i);
-        for d in &mut self.world.decisions {
-            if d.proj > i {
-                d.proj -= 1;
-            }
-        }
-        self.world.events.retain(|e| e.proj != Some(i));
-        for e in &mut self.world.events {
-            if let Some(p) = &mut e.proj {
-                if *p > i {
-                    *p -= 1;
-                }
-            }
-        }
-        self.world.links.retain(|l| l.a != i && l.b != i);
-        for l in &mut self.world.links {
-            if l.a > i {
-                l.a -= 1;
-            }
-            if l.b > i {
-                l.b -= 1;
-            }
-        }
-
-        // fix up every live index that pointed at or past the removed base
-        let shift = |v: usize| if v > i { v - 1 } else { v };
-        self.sel = self.sel.and_then(|s| if s == i { None } else { Some(shift(s)) });
-        self.interior = self.interior.and_then(|s| if s == i { None } else { Some(shift(s)) });
-        self.link_from = self.link_from.and_then(|s| if s == i { None } else { Some(shift(s)) });
-        self.drag_base = self.drag_base.and_then(|s| if s == i { None } else { Some(shift(s)) });
-        self.recovery = self.recovery.and_then(|s| if s == i { None } else { Some(shift(s)) });
-        self.briefing = None; // decision indices shifted — close any open briefing
-        self.highlight = self.highlight.take().and_then(|(p, a)| if p == i { None } else { Some((shift(p), a)) });
-        for (_, _, s) in &mut self.back {
-            *s = s.and_then(|v| if v == i { None } else { Some(shift(v)) });
-        }
-        self.unseen.retain(|&p| p != i);
-        for p in &mut self.unseen {
-            *p = shift(*p);
-        }
-        self.toasts.retain(|t| t.proj != Some(i));
-        for t in &mut self.toasts {
-            t.proj = t.proj.and_then(|p| if p == i { None } else { Some(shift(p)) });
-        }
-        self.wpings.retain(|p| p.proj != i);
-        for p in &mut self.wpings {
-            p.proj = shift(p.proj);
-        }
-        self.mpings.retain(|p| p.proj != i);
-        for p in &mut self.mpings {
-            p.proj = shift(p.proj);
-        }
-        self.last_num = None;
-        self.idle_idx = usize::MAX;
-        self.destroy_arm = None;
-        self.sroom = self.sroom.take().and_then(|r| match r {
-            SRoom::Pylon(pi, ti) => (pi != i).then(|| SRoom::Pylon(shift(pi), ti)),
-            SRoom::Question(pi, qi) => (pi != i).then(|| SRoom::Question(shift(pi), qi)),
-        });
-        self.sel_structs.retain(|r| match r {
-            SRoom::Pylon(pi, _) | SRoom::Question(pi, _) => *pi != i,
-        });
-        for r in &mut self.sel_structs {
-            match r {
-                SRoom::Pylon(pi, _) | SRoom::Question(pi, _) => *pi = shift(*pi),
-            }
-        }
-
-        self.world.events.push(Event {
-            ts: ts.clone(),
-            proj: None,
-            agent: None,
-            text: format!("base destroyed: {} (record archived)", name),
-        });
-        self.toast(
-            &format!("💥 BASE DESTROYED · {}", ts),
-            &name,
-            &format!("record archived → {}", apath),
-            true,
-            None,
-        );
-        self.dirty = true;
-    }
 
     fn apply(&mut self, act: Act) {
         match act {
@@ -1016,30 +702,14 @@ impl CommanderApp {
             Act::SelectBase(i) => self.select_base(i),
             Act::SelectCapture(ci) => self.sel_capture = Some(ci),
             Act::FileCapture { cap, proj } => {
-                if cap < self.world.captures.len() {
-                    let c = self.world.captures.remove(cap);
-                    let ts = self.clock();
-                    let pname = self.world.projects[proj].name.to_string();
-                    self.world.events.push(Event {
-                        ts: ts.clone(),
-                        proj: Some(proj),
-                        agent: None,
-                        text: format!("filed capture: {}", c.text),
-                    });
-                    if self.sel != Some(proj) {
-                        self.rt[proj].delta.push(format!("you filed: {} ({})", c.text, ts));
-                        self.rt[proj].unseen_events += 1;
-                    }
-                    self.toast(&format!("⚡ FILED · {}", ts), &c.text, &format!("→ {}", pname), true, Some(proj));
-                    self.dirty = true;
+                if cap < self.world.captures.len() && proj < self.world.projects.len() {
+                    self.api.send(Req::FileCapture { cap, proj });
                 }
                 self.sel_capture = None;
             }
             Act::DiscardCapture(ci) => {
                 if ci < self.world.captures.len() {
-                    let c = self.world.captures.remove(ci);
-                    self.toast("🗑 DISCARDED", &c.text, "", true, None);
-                    self.dirty = true;
+                    self.api.send(Req::DiscardCapture { cap: ci });
                 }
                 self.sel_capture = None;
             }
@@ -1051,7 +721,13 @@ impl CommanderApp {
                 self.recovery = None;
                 self.briefing = Some(di);
             }
-            Act::CommitDecision(di, oi) => self.commit_decision(di, oi),
+            Act::CommitDecision(di, oi) => {
+                if di < self.world.decisions.len() && oi < self.world.decisions[di].options.len() {
+                    self.api.send(Req::Decide { d: di, o: oi });
+                }
+                self.idle_idx = usize::MAX;
+                self.briefing = None;
+            }
             Act::CloseBriefing => self.briefing = None,
             Act::OpenRecovery(pi) => {
                 self.briefing = None;
@@ -1079,46 +755,10 @@ impl CommanderApp {
                 self.build_focus = true;
             }
             Act::CommitBase(name) => {
-                let idx = self.world.projects.len();
-                let color = PROJ_COLORS[idx % PROJ_COLORS.len()];
-                let pos = (
-                    (self.build_pos.x - 180.0).clamp(0.0, WW - BASE_W),
-                    (self.build_pos.y - 130.0).clamp(0.0, WH - 200.0),
-                );
-                self.world.projects.push(Project {
-                    name: name.clone(),
-                    color,
-                    icon: idx % ICON_COUNT,
-                    status: "active".into(),
-                    goal: String::new(),
-                    agents: vec![],
-                    tasks: vec![],
-                    pos,
-                    modules: vec![],
-                    questions: vec![],
-                    cwd: None,
-                    sandbox: None,
-                    model: None,
-                });
-                self.rt.push(new_rt(self.now_min));
-                let ts = self.clock();
-                self.world.events.push(Event {
-                    ts: ts.clone(),
-                    proj: Some(idx),
-                    agent: None,
-                    text: format!("base established: {}", name),
-                });
-                self.toast(
-                    &format!("⌂ BASE ESTABLISHED · {}", ts),
-                    &name,
-                    "drag to reposition · L links it to another base",
-                    true,
-                    Some(idx),
-                );
+                // the daemon answers with the new base's index; the reply focuses it
+                self.api.send(Req::Place { x: self.build_pos.x, y: self.build_pos.y, name });
                 self.build_open = false;
                 self.build_text.clear();
-                self.dirty = true;
-                self.focus(idx, 0.95, false);
             }
             Act::PlacePylon(wp) => match self.sel {
                 Some(_) => {
@@ -1130,28 +770,7 @@ impl CommanderApp {
             },
             Act::CommitPylon(title) => {
                 if let Some(i) = self.sel {
-                    let ts = self.clock();
-                    self.world.projects[i].tasks.push(Task {
-                        title: title.clone(),
-                        state: TaskState::Todo,
-                        pos: Some((self.pylon_pos.x, self.pylon_pos.y)),
-                        notes: String::new(),
-                    });
-                    self.world.events.push(Event {
-                        ts: ts.clone(),
-                        proj: Some(i),
-                        agent: None,
-                        text: format!("pylon warped in: {}", title),
-                    });
-                    self.toast(
-                        &format!("◆ PYLON WARPED IN · {}", ts),
-                        &title,
-                        "click it to cycle todo → doing → done · drag to reposition",
-                        true,
-                        Some(i),
-                    );
-                    self.ping(i);
-                    self.dirty = true;
+                    self.api.send(Req::Pylon { i, title, x: self.pylon_pos.x, y: self.pylon_pos.y });
                 }
                 self.pylon_open = false;
                 self.pylon_text.clear();
@@ -1160,39 +779,38 @@ impl CommanderApp {
                 if let Some(t) = self.world.projects.get_mut(pi).and_then(|p| p.tasks.get_mut(ti)) {
                     if t.state != st {
                         t.state = st;
-                        let title = t.title.clone();
-                        let ts = self.clock();
-                        self.world.events.push(Event {
-                            ts,
-                            proj: Some(pi),
-                            agent: None,
-                            text: format!("pylon {} → {}", title, st.label()),
-                        });
-                        self.dirty = true;
+                        t.unread = false;
+                        self.api.send(Req::edit(pi, Target::Pylon(ti)).state(st));
                     }
                 }
             }
-            Act::Dispatch(pi, ti) => {
-                if let Err(e) = self.dispatch(pi, ti, None, None) {
-                    self.toast("⚠ DISPATCH FAILED", &e, "set the base repo: /base?i=..&cwd=/path", false, Some(pi));
-                }
+            Act::Dispatch(room) => {
+                let (pi, at) = room.target();
+                self.api.send(Req::Dispatch { i: pi, at, cont: false });
             }
-            Act::HaltUnit(pi, aid) => {
-                self.halt(pi, &aid);
+            Act::Continue(room) => {
+                let (pi, at) = room.target();
+                self.api.send(Req::Dispatch { i: pi, at, cont: true });
             }
+            Act::HaltUnit(pi, aid) => self.api.send(Req::Halt { i: pi, agent: aid }),
             Act::SetQuestion(pi, qi, r) => {
                 if let Some(q) = self.world.projects.get_mut(pi).and_then(|p| p.questions.get_mut(qi)) {
                     if q.resolved != r {
                         q.resolved = r;
-                        let text = q.text.clone();
-                        let ts = self.clock();
-                        self.world.events.push(Event {
-                            ts,
-                            proj: Some(pi),
-                            agent: None,
-                            text: if r { format!("question resolved: {}", text) } else { format!("question reopened: {}", text) },
-                        });
-                        self.dirty = true;
+                        self.api.send(Req::edit(pi, Target::Question(qi)).resolved(r));
+                    }
+                }
+            }
+            Act::SetEffort(room, e) => {
+                let (pi, at) = room.target();
+                let slot = match room {
+                    SRoom::Pylon(pi, ti) => self.world.projects.get_mut(pi).and_then(|p| p.tasks.get_mut(ti)).map(|t| &mut t.effort),
+                    SRoom::Question(pi, qi) => self.world.projects.get_mut(pi).and_then(|p| p.questions.get_mut(qi)).map(|q| &mut q.effort),
+                };
+                if let Some(slot) = slot {
+                    if *slot != e {
+                        *slot = e.clone();
+                        self.api.send(Req::edit(pi, at).effort(e));
                     }
                 }
             }
@@ -1206,28 +824,7 @@ impl CommanderApp {
             },
             Act::CommitQuestion(text) => {
                 if let Some(i) = self.sel {
-                    let ts = self.clock();
-                    self.world.projects[i].questions.push(Question {
-                        text: text.clone(),
-                        resolved: false,
-                        pos: Some((self.quest_pos.x, self.quest_pos.y)),
-                        notes: String::new(),
-                    });
-                    self.world.events.push(Event {
-                        ts: ts.clone(),
-                        proj: Some(i),
-                        agent: None,
-                        text: format!("sensor array raised: {}", text),
-                    });
-                    self.toast(
-                        &format!("⌖ SENSOR ARRAY ONLINE · {}", ts),
-                        &text,
-                        "scanning — click it when the question is answered",
-                        true,
-                        Some(i),
-                    );
-                    self.ping(i);
-                    self.dirty = true;
+                    self.api.send(Req::Question { i, text, x: self.quest_pos.x, y: self.quest_pos.y });
                 }
                 self.quest_open = false;
                 self.quest_text.clear();
@@ -1235,86 +832,28 @@ impl CommanderApp {
             Act::ToggleQuestion(pi, qi) => {
                 if let Some(q) = self.world.projects.get_mut(pi).and_then(|p| p.questions.get_mut(qi)) {
                     q.resolved = !q.resolved;
-                    let (text, resolved) = (q.text.clone(), q.resolved);
-                    let ts = self.clock();
-                    self.world.events.push(Event {
-                        ts,
-                        proj: Some(pi),
-                        agent: None,
-                        text: if resolved {
-                            format!("question resolved: {}", text)
-                        } else {
-                            format!("question reopened: {}", text)
-                        },
-                    });
-                    self.dirty = true;
+                    let r = q.resolved;
+                    self.api.send(Req::edit(pi, Target::Question(qi)).resolved(r));
                 }
             }
             Act::DestroyStructs => {
-                // demolish the group-selected substructures; remove per project in
-                // descending index order so earlier removals don't shift later ones
-                let ts = self.clock();
                 let sel = std::mem::take(&mut self.sel_structs);
-                let mut tasks: Vec<(usize, usize)> = vec![];
-                let mut quests: Vec<(usize, usize)> = vec![];
-                for r in sel {
-                    match r {
-                        SRoom::Pylon(pi, ti) => tasks.push((pi, ti)),
-                        SRoom::Question(pi, qi) => quests.push((pi, qi)),
-                    }
+                let list: Vec<(usize, Target)> = sel.iter().map(|r| r.target()).collect();
+                if !list.is_empty() {
+                    self.api.send(Req::RemoveStructs { list });
                 }
-                tasks.sort_by(|a0, b0| b0.cmp(a0));
-                tasks.dedup();
-                quests.sort_by(|a0, b0| b0.cmp(a0));
-                quests.dedup();
-                let mut n = 0usize;
-                for (pi, ti) in tasks {
-                    if let Some(p) = self.world.projects.get_mut(pi) {
-                        if ti < p.tasks.len() {
-                            let t0 = p.tasks.remove(ti);
-                            self.world.events.push(Event {
-                                ts: ts.clone(),
-                                proj: Some(pi),
-                                agent: None,
-                                text: format!("pylon demolished: {}", t0.title),
-                            });
-                            n += 1;
-                        }
-                    }
-                }
-                for (pi, qi) in quests {
-                    if let Some(p) = self.world.projects.get_mut(pi) {
-                        if qi < p.questions.len() {
-                            let q = p.questions.remove(qi);
-                            self.world.events.push(Event {
-                                ts: ts.clone(),
-                                proj: Some(pi),
-                                agent: None,
-                                text: format!("sensor array decommissioned: {}", q.text),
-                            });
-                            n += 1;
-                        }
-                    }
-                }
-                // indices shifted — drop anything that might point at removed slots
+                // indices will shift — drop anything that might point at removed slots
                 self.sroom = None;
                 self.drag_pylon = None;
                 self.drag_quest = None;
                 self.sdestroy_arm = None;
-                self.toast(
-                    &format!("💥 DEMOLISHED · {}", ts),
-                    &format!("{} structure{} removed", n, if n == 1 { "" } else { "s" }),
-                    "logged in the event feed",
-                    true,
-                    None,
-                );
-                self.dirty = true;
             }
             Act::DestroyBase(i) => {
                 if i < self.world.projects.len() {
                     let armed = self.destroy_arm.map_or(false, |(p, t)| p == i && self.time - t < 4.0);
                     if armed {
-                        self.destroy_base(i);
+                        self.api.send(Req::Destroy { i });
+                        self.destroy_arm = None;
                     } else {
                         self.destroy_arm = Some((i, self.time));
                         let name = self.world.projects[i].name.clone();
@@ -1341,67 +880,16 @@ impl CommanderApp {
                 }
                 None => self.toast("⛓ LINK MODE", "Select a base first (1–4 or click one), then press L.", "", false, None),
             },
-            Act::ToggleLink(from, to) => {
-                if from == to {
-                    self.toast("⛓ LINK", "A base cannot link to itself.", "", false, None);
-                } else if from < self.world.projects.len() && to < self.world.projects.len() {
-                    let existing = self
-                        .world
-                        .links
-                        .iter()
-                        .position(|l| (l.a == from && l.b == to) || (l.a == to && l.b == from));
-                    let ts = self.clock();
-                    let names = format!("{} ⟷ {}", self.world.projects[from].name, self.world.projects[to].name);
-                    match existing {
-                        Some(k) => {
-                            self.world.links.remove(k);
-                            self.toast(&format!("⛓ LINK SEVERED · {}", ts), &names, "", true, None);
-                        }
-                        None => {
-                            self.world.links.push(Link { a: from, b: to });
-                            self.world.events.push(Event {
-                                ts: ts.clone(),
-                                proj: Some(from),
-                                agent: None,
-                                text: format!("link established: {}", names),
-                            });
-                            self.toast(&format!("⛓ LINK ESTABLISHED · {}", ts), &names, "click the ◆ midpoint node to sever", true, None);
-                        }
-                    }
-                    self.dirty = true;
-                }
-            }
+            Act::ToggleLink(from, to) => self.api.send(Req::Link { a: from, b: to }),
             Act::DeleteLink(li) => {
                 if li < self.world.links.len() {
-                    let l = self.world.links.remove(li);
-                    let names = format!(
-                        "{} ⟷ {}",
-                        self.world.projects.get(l.a).map(|p| p.name.as_str()).unwrap_or("?"),
-                        self.world.projects.get(l.b).map(|p| p.name.as_str()).unwrap_or("?"),
-                    );
-                    self.toast(&format!("⛓ LINK SEVERED · {}", self.clock()), &names, "", true, None);
-                    self.dirty = true;
+                    self.api.send(Req::Unlink { li });
                 }
             }
             Act::CommitCapture(text) => {
-                let ts = self.clock();
-                let n = self.world.captures.len() as f32;
-                let pos = (
-                    (self.cam.target_pos.x - 220.0 + (n % 3.0) * 150.0).clamp(0.0, WW - 200.0),
-                    (self.cam.target_pos.y + 120.0 + ((n / 3.0).floor() % 3.0) * 100.0).clamp(0.0, WH - 80.0),
-                );
-                self.world.captures.push(CaptureNote { text: text.clone(), ts: ts.clone(), pos });
-                self.world.events.push(Event { ts: ts.clone(), proj: None, agent: None, text: text.clone() });
-                self.toast(
-                    &format!("⚡ CAPTURED · {}", ts),
-                    &text,
-                    "drifting unsorted mid-map — file it whenever",
-                    true,
-                    None,
-                );
+                self.api.send(Req::Capture { text, x: self.cam.target_pos.x, y: self.cam.target_pos.y });
                 self.capture_open = false;
                 self.capture_text.clear();
-                self.dirty = true;
             }
             Act::SpaceJump => {
                 if self.unseen.is_empty() {
@@ -1557,8 +1045,15 @@ impl CommanderApp {
                 self.brief_focus = true;
             }
             if inp.key_pressed(Key::W) {
-                if let Some(SRoom::Pylon(pi, ti)) = self.sroom {
-                    self.acts.push(Act::Dispatch(pi, ti));
+                // inside any structure room, w dispatches a unit to it (pylon → worker, sensor → scout)
+                if let Some(room) = self.sroom {
+                    self.acts.push(Act::Dispatch(room));
+                }
+            }
+            if inp.key_pressed(Key::N) {
+                // inside a structure room, n continues: brief + last report → next turn
+                if let Some(room) = self.sroom {
+                    self.acts.push(Act::Continue(room));
                 }
             }
             if inp.key_pressed(Key::I) {
@@ -1609,6 +1104,9 @@ impl CommanderApp {
                     self.fit_all();
                     self.cam.pos = self.cam.target_pos;
                     self.cam.scale = self.cam.target_scale;
+                }
+                if self.drag_base.map_or(false, |i| i >= self.world.projects.len()) {
+                    self.drag_base = None;
                 }
                 let resp = ui.allocate_rect(rect, Sense::click_and_drag());
                 if self.interior.map_or(false, |ii| ii >= self.world.projects.len()) {
@@ -1695,6 +1193,7 @@ impl CommanderApp {
                             let pr = &mut self.world.projects[i];
                             pr.pos.0 = (pr.pos.0 + d.x / self.cam.scale).clamp(0.0, WW - BASE_W);
                             pr.pos.1 = (pr.pos.1 + d.y / self.cam.scale).clamp(0.0, WH - 200.0);
+                            self.overlay(OverlayKey::Base(i));
                         }
                         ui.output_mut(|o| o.cursor_icon = CursorIcon::Move);
                     } else if let Some(ci) = self.drag_capture {
@@ -1702,6 +1201,7 @@ impl CommanderApp {
                             let c = &mut self.world.captures[ci];
                             c.pos.0 = (c.pos.0 + d.x / self.cam.scale).clamp(0.0, WW - 200.0);
                             c.pos.1 = (c.pos.1 + d.y / self.cam.scale).clamp(0.0, WH - 80.0);
+                            self.overlay(OverlayKey::Capture(ci));
                         }
                         ui.output_mut(|o| o.cursor_icon = CursorIcon::Move);
                     } else if let Some((pi, ti)) = self.drag_pylon {
@@ -1710,6 +1210,7 @@ impl CommanderApp {
                                 pos.0 = (pos.0 + d.x / self.cam.scale).clamp(0.0, WW);
                                 pos.1 = (pos.1 + d.y / self.cam.scale).clamp(0.0, WH);
                             }
+                            self.overlay(OverlayKey::Struct(pi, Target::Pylon(ti)));
                         }
                         ui.output_mut(|o| o.cursor_icon = CursorIcon::Move);
                     } else if let Some((pi, qi)) = self.drag_quest {
@@ -1718,6 +1219,7 @@ impl CommanderApp {
                                 pos.0 = (pos.0 + d.x / self.cam.scale).clamp(0.0, WW);
                                 pos.1 = (pos.1 + d.y / self.cam.scale).clamp(0.0, WH);
                             }
+                            self.overlay(OverlayKey::Struct(pi, Target::Question(qi)));
                         }
                         ui.output_mut(|o| o.cursor_icon = CursorIcon::Move);
                     } else {
@@ -1745,8 +1247,26 @@ impl CommanderApp {
                             self.sel = None; // structure and base selection are exclusive
                         }
                     }
-                    if self.drag_base.is_some() || self.drag_capture.is_some() || self.drag_pylon.is_some() || self.drag_quest.is_some() {
-                        self.dirty = true;
+                    // the drop lands on the daemon; the overlay holds until its snapshot arrives
+                    if let Some(i) = self.drag_base {
+                        if let Some(p) = self.world.projects.get(i) {
+                            self.api.send(Req::MoveBase { i, x: p.pos.0, y: p.pos.1 });
+                        }
+                    }
+                    if let Some(ci) = self.drag_capture {
+                        if let Some(c) = self.world.captures.get(ci) {
+                            self.api.send(Req::MoveCapture { ci, x: c.pos.0, y: c.pos.1 });
+                        }
+                    }
+                    if let Some((pi, ti)) = self.drag_pylon {
+                        if let Some((x, y)) = self.world.projects.get(pi).and_then(|p| p.tasks.get(ti)).and_then(|t| t.pos) {
+                            self.api.send(Req::edit(pi, Target::Pylon(ti)).pos(x, y));
+                        }
+                    }
+                    if let Some((pi, qi)) = self.drag_quest {
+                        if let Some((x, y)) = self.world.projects.get(pi).and_then(|p| p.questions.get(qi)).and_then(|q| q.pos) {
+                            self.api.send(Req::edit(pi, Target::Question(qi)).pos(x, y));
+                        }
                     }
                     self.drag_base = None;
                     self.drag_capture = None;
@@ -1834,8 +1354,8 @@ impl CommanderApp {
             let ca = to(self.base_center(la));
             let cb = to(self.base_center(lb));
             let mid = ca.lerp(cb, 0.5);
-            let col_a = self.world.projects[la].color;
-            let col_b = self.world.projects[lb].color;
+            let col_a = rgb(self.world.projects[la].color);
+            let col_b = rgb(self.world.projects[lb].color);
             p.line_segment([ca, mid], Stroke::new(1.5, a(col_a, 140)));
             p.line_segment([mid, cb], Stroke::new(1.5, a(col_b, 140)));
             // traffic pulse
@@ -1917,7 +1437,7 @@ impl CommanderApp {
             let base_sel = self.sel == Some(pi);
             let show_label = base_sel || s >= 0.75;
             let bc = to(self.base_center(pi));
-            let bcol = self.world.projects[pi].color;
+            let bcol = rgb(self.world.projects[pi].color);
             // faint dashed feed line from each structure back to its base
             let feed = |p: &Painter, o: Pos2, selected: bool| {
                 let alpha = if base_sel || selected { 130 } else { 48 };
@@ -1929,14 +1449,15 @@ impl CommanderApp {
                 if !rect.expand(140.0).contains(o) {
                     continue;
                 }
-                let (state, title) = {
+                let (state, title, unread) = {
                     let tk = &self.world.projects[pi].tasks[ti];
-                    (tk.state, tk.title.clone())
+                    (tk.state, tk.title.clone(), tk.unread)
                 };
                 let selected = self.sel_structs.contains(&SRoom::Pylon(pi, ti));
                 feed(p, o, selected);
                 let phase = (pi * 7 + ti) as f64 * 1.31;
-                let zr = Self::draw_pylon(p, o, ss, t, phase, state, (show_label || selected).then_some(title.as_str()));
+                // an unread report keeps its label up at any zoom so the pulse can be placed
+                let zr = Self::draw_pylon(p, o, ss, t, phase, state, unread, (show_label || selected || unread).then_some(title.as_str()));
                 if selected {
                     Self::draw_sel_ring(p, zr, t);
                 }
@@ -2073,9 +1594,9 @@ impl CommanderApp {
             let ir = Rect::from_min_size(pt(10.0, 36.0), vec2(64.0 * s, 64.0 * s));
             p.rect_filled(ir, CornerRadius::same(3), Color32::from_rgb(0x0a, 0x10, 0x0b));
             p.image(tex.id(), ir, icon_uv(proj.icon), Color32::WHITE);
-            p.rect_stroke(ir, CornerRadius::same(3), Stroke::new(1.5, a(proj.color, 220)), StrokeKind::Middle);
+            p.rect_stroke(ir, CornerRadius::same(3), Stroke::new(1.5, a(rgb(proj.color), 220)), StrokeKind::Middle);
         } else {
-            p.rect_filled(Rect::from_min_size(pt(10.0, 36.0), vec2(10.0 * s, 64.0 * s)), CornerRadius::ZERO, proj.color);
+            p.rect_filled(Rect::from_min_size(pt(10.0, 36.0), vec2(10.0 * s, 64.0 * s)), CornerRadius::ZERO, rgb(proj.color));
         }
         // title centered in the header
         p.text(pt(BASE_W / 2.0, 14.0), Align2::CENTER_CENTER, &proj.name, FontId::proportional((13.0 * s).max(7.0)), TXT);
@@ -2262,7 +1783,9 @@ impl CommanderApp {
 
     /// starcraft-style pylon: floating crystal over a ground plate; represents one
     /// goal/task of its base. powered look follows the task state.
-    fn draw_pylon(p: &Painter, o: Pos2, s: f32, t: f64, phase: f64, state: TaskState, label: Option<&str>) -> Rect {
+    /// `unread`: a finished report nobody has opened yet — the crystal emits a
+    /// slow expanding ring every few seconds until the room is entered
+    fn draw_pylon(p: &Painter, o: Pos2, s: f32, t: f64, phase: f64, state: TaskState, unread: bool, label: Option<&str>) -> Rect {
         let col = match state {
             TaskState::Todo => Color32::from_rgb(0x8f, 0xa8, 0xb8),
             TaskState::Doing => CYAN,
@@ -2272,6 +1795,15 @@ impl CommanderApp {
         let powered = matches!(state, TaskState::Doing | TaskState::Blocked);
         let bob = (if powered { (t * 2.4 + phase).sin() * 3.0 } else { (t * 1.1 + phase).sin() * 1.5 }) as f32 * s;
         let cc = o + vec2(0.0, -18.0 * s + bob);
+
+        // unread pulse: one ring leaves the crystal every 3s and fades out over
+        // the first half of the period; the crystal flashes as it departs
+        let pulse = if unread { Some((((t + phase) / 3.0).fract() * 2.0) as f32) } else { None };
+        if let Some(k) = pulse.filter(|k| *k < 1.0) {
+            let ease = 1.0 - (1.0 - k) * (1.0 - k);
+            p.circle_stroke(cc, (10.0 + ease * 75.0) * s, Stroke::new(1.5, a(col, ((1.0 - k) * 170.0) as u8)));
+            p.circle_filled(cc, (14.0 + (1.0 - k) * 8.0) * s, a(col, ((1.0 - k) * 60.0) as u8));
+        }
 
         // power field (doing) / alarm ring (blocked)
         if state == TaskState::Doing {
@@ -2414,7 +1946,7 @@ impl CommanderApp {
             }
         };
         let base = self.world.projects[pi].name.clone();
-        let base_col = self.world.projects[pi].color;
+        let base_col = rgb(self.world.projects[pi].color);
 
         // floor + faint tile grid
         p.rect_filled(rect, CornerRadius::ZERO, Color32::from_rgb(0x08, 0x0d, 0x09));
@@ -2447,7 +1979,7 @@ impl CommanderApp {
             match room {
                 SRoom::Pylon(pi2, ti) => {
                     let state = self.world.projects[pi2].tasks[ti].state;
-                    Self::draw_pylon(&ip, ground, 1.3, t, 0.0, state, None);
+                    Self::draw_pylon(&ip, ground, 1.3, t, 0.0, state, false, None);
                 }
                 SRoom::Question(pi2, qi) => {
                     let r = self.world.projects[pi2].questions[qi].resolved;
@@ -2516,19 +2048,63 @@ impl CommanderApp {
             cx += w + 10.0;
         }
 
-        // worker row (pylons only): who is on this pylon, dispatch / halt
-        let mut log_top = cy + 48.0;
-        if let SRoom::Pylon(pi2, ti) = room {
-            let title2 = self.world.projects[pi2].tasks[ti].title.clone();
+        // effort chips — codex reasoning effort for units sent to this structure.
+        // "base" = inherit the base's setting (or codex's config when unset)
+        {
+            let (cur, base_eff) = match room {
+                SRoom::Pylon(pi2, ti) => (self.world.projects[pi2].tasks[ti].effort.clone(), self.world.projects[pi2].effort.clone()),
+                SRoom::Question(pi2, qi) => (self.world.projects[pi2].questions[qi].effort.clone(), self.world.projects[pi2].effort.clone()),
+            };
+            let mut echips: Vec<(String, Option<String>, bool)> = vec![(format!("BASE{}", base_eff.as_deref().map(|e| format!(" ({})", e)).unwrap_or_default()), None, cur.is_none())];
+            for e in EFFORTS {
+                echips.push((e.to_uppercase(), Some(e.to_string()), cur.as_deref() == Some(e)));
+            }
+            let lab = p.layout_no_wrap("EFFORT".into(), FontId::monospace(9.5), FAINT);
+            let mut ews = vec![];
+            let mut etotal = lab.size().x + 12.0;
+            for (label, ..) in &echips {
+                let w = p.layout_no_wrap(label.clone(), FontId::monospace(10.0), TXT).size().x + 18.0;
+                ews.push(w);
+                etotal += w + 6.0;
+            }
+            let mut ex = inner.center().x - (etotal - 6.0) / 2.0;
+            let ey = cy + 34.0;
+            let labw = lab.size().x;
+            p.galley(pos2(ex, ey + 5.0), lab, FAINT);
+            ex += labw + 12.0;
+            for ((label, e, active), w) in echips.into_iter().zip(ews) {
+                let r = Rect::from_min_size(pos2(ex, ey), vec2(w, 20.0));
+                let c = if e.is_none() { Color32::from_rgb(0x8f, 0xa8, 0xb8) } else { AMBER };
+                p.rect_filled(r, CornerRadius::same(3), if active { a(c, 55) } else { Color32::from_rgba_unmultiplied(16, 24, 17, 235) });
+                p.rect_stroke(r, CornerRadius::same(3), Stroke::new(1.0, a(c, if active { 200 } else { 70 })), StrokeKind::Middle);
+                p.text(r.center(), Align2::CENTER_CENTER, label, FontId::monospace(10.0), if active { c } else { DIM });
+                self.clicks.push((r, ClickZone::SetEffort(room, e)));
+                ex += w + 6.0;
+            }
+        }
+
+        // worker row: who is on this structure, dispatch / halt. a pylon gets a
+        // worker; a sensor array gets a scout whose DONE line resolves the question.
+        let mut log_top;
+        {
+            let pi2 = pi;
             let pname = self.world.projects[pi2].name.clone();
-            let unit = self.world.projects[pi2].agents.iter().find(|ag| ag.task == title2).cloned();
-            let running = unit.as_ref().map_or(false, |ag| self.workers.running(&pname, &ag.id));
+            let unit = self.world.projects[pi2].agents.iter().find(|ag| ag.task == title && ag.sensor == !is_pylon).cloned();
+            let running = unit.as_ref().map_or(false, |ag| self.running(&pname, &ag.id));
             let has_repo = self.world.projects[pi2].cwd.is_some();
             let mut wchips: Vec<(String, Color32, ClickZone)> = vec![];
             match &unit {
                 Some(ag) if running => wchips.push((format!("■ HALT {}", ag.id), RED, ClickZone::HaltUnit(pi2, ag.id.clone()))),
-                Some(ag) => wchips.push((format!("⚙ RE-DISPATCH {}", ag.id), CYAN, ClickZone::Dispatch(pi2, ti))),
-                None => wchips.push(("⚙ DISPATCH WORKER  [w]".into(), CYAN, ClickZone::Dispatch(pi2, ti))),
+                Some(ag) => {
+                    // re-dispatch starts over from the brief; continue folds the unit's
+                    // last report into the prompt so the next turn picks up from there
+                    wchips.push((format!("⚙ RE-DISPATCH {}  [w]", ag.id), CYAN, ClickZone::Dispatch(room)));
+                    if !ag.last_msg.trim().is_empty() {
+                        wchips.push((format!("↻ CONTINUE {}  [n]", ag.id), GREEN, ClickZone::Continue(room)));
+                    }
+                }
+                None if is_pylon => wchips.push(("⚙ DISPATCH WORKER  [w]".into(), CYAN, ClickZone::Dispatch(room))),
+                None => wchips.push(("⌖ DISPATCH SCOUT  [w]".into(), CYAN, ClickZone::Dispatch(room))),
             }
             let mut ws = vec![];
             let mut wtotal = 0.0;
@@ -2538,7 +2114,7 @@ impl CommanderApp {
                 wtotal += w + 10.0;
             }
             let mut wx = inner.center().x - (wtotal - 10.0) / 2.0;
-            let wy = cy + 36.0;
+            let wy = cy + 66.0;
             for ((label, c, zone), w) in wchips.into_iter().zip(ws) {
                 let r = Rect::from_min_size(pos2(wx, wy), vec2(w, 26.0));
                 p.rect_filled(r, CornerRadius::same(3), Color32::from_rgba_unmultiplied(16, 24, 17, 235));
@@ -2556,12 +2132,13 @@ impl CommanderApp {
             log_top = wy + 60.0;
             if let Some(ag) = &unit {
                 let head = format!(
-                    "🪖 {} · {}{} · {} turns · {} tok{}",
+                    "🪖 {} · {}{} · {} turns · {} tok{}{}",
                     ag.id,
                     ag.state.label(),
                     if running { " (codex running)" } else { "" },
                     ag.turns,
                     ag.tokens,
+                    ag.effort.as_deref().map(|e| format!(" · effort {}", e)).unwrap_or_default(),
                     ag.thread_id.as_ref().map(|t| format!(" · thread {}", t.chars().take(8).collect::<String>())).unwrap_or_default()
                 );
                 p.text(pos2(inner.min.x + 22.0, log_top), Align2::LEFT_TOP, head, FontId::monospace(10.0), if running { CYAN } else { FAINT });
@@ -2600,7 +2177,7 @@ impl CommanderApp {
             .filter(|e| {
                 e.proj == Some(pi)
                     && (e.text.to_lowercase().contains(&title.to_lowercase())
-                        || matches!((room, &e.agent), (SRoom::Pylon(pi2, ti), Some(aid)) if self.world.projects[pi2].agents.iter().any(|ag| &ag.id == aid && ag.task == self.world.projects[pi2].tasks[ti].title)))
+                        || matches!(&e.agent, Some(aid) if self.world.projects[pi].agents.iter().any(|ag| &ag.id == aid && ag.task == title && ag.sensor == !is_pylon)))
             })
             .rev()
             .take(12)
@@ -2669,7 +2246,9 @@ impl CommanderApp {
         }
         self.brief_focused = focused;
         if out.inner.changed() {
-            self.dirty = true;
+            let (pi, at) = room.target();
+            self.overlay(OverlayKey::Notes(pi, at));
+            self.notes_due = Some((room, self.time));
         }
     }
 
@@ -2677,7 +2256,7 @@ impl CommanderApp {
         self.clicks.clear();
         let t = self.time;
         let proj = &self.world.projects[i];
-        let color = proj.color;
+        let color = rgb(proj.color);
         let name = proj.name.clone();
         let status = proj.status.clone();
         let goal = proj.goal.clone();
@@ -2932,7 +2511,8 @@ impl CommanderApp {
                                 .show_value(true),
                         );
                         if resp.changed() {
-                            self.dirty = true;
+                            self.overlay(OverlayKey::Scale);
+                            self.scale_due = Some(self.time);
                         }
                         ui.label(RichText::new("◆ SIZE ×").monospace().size(9.0).color(DIM));
                     });
@@ -2942,8 +2522,7 @@ impl CommanderApp {
 
     /// codex subscription supply counter, top center (RTS resource style)
     fn codex_meter(&self, ctx: &egui::Context) {
-        let usage = self.codex.lock().unwrap().clone();
-        let Some(u) = usage else { return };
+        let Some(u) = self.codex.clone() else { return };
         let col = if u.pct_left > 50.0 {
             GREEN
         } else if u.pct_left > 20.0 {
@@ -2971,7 +2550,7 @@ impl CommanderApp {
                         p.rect_stroke(bar, CornerRadius::same(2), Stroke::new(1.0, a(col, 90)), StrokeKind::Middle);
                         ui.label(RichText::new(format!("{:.0}%", u.pct_left)).monospace().size(12.0).color(col));
                         ui.label(
-                            RichText::new(format!("↻ {}", crate::codex::eta(u.resets_at)))
+                            RichText::new(format!("↻ {}", codex_eta(u.resets_at)))
                                 .monospace()
                                 .size(9.5)
                                 .color(DIM),
@@ -2992,7 +2571,7 @@ impl CommanderApp {
             .show(ctx, |ui| {
                 for i in 0..self.world.projects.len() {
                     let proj_name = self.world.projects[i].name.clone();
-                    let color = self.world.projects[i].color;
+                    let color = rgb(self.world.projects[i].color);
                     let tier = self.tier(i);
                     let age = self.age_str(i);
                     let n = self.rt[i].unseen_events;
@@ -3151,7 +2730,7 @@ impl CommanderApp {
                 Tier::Cold => 115,
                 Tier::Frozen => 64,
             };
-            p.rect_filled(Rect::from_center_size(c, vec2(14.0, 10.0)), CornerRadius::same(2), a(self.world.projects[i].color, alpha));
+            p.rect_filled(Rect::from_center_size(c, vec2(14.0, 10.0)), CornerRadius::same(2), a(rgb(self.world.projects[i].color), alpha));
             let blocked = self.world.projects[i].agents.iter().any(|ag| ag.state == AgentState::Blocked);
             let pend = self.world.decisions.iter().any(|d| d.proj == i && !d.resolved);
             if blocked {
@@ -3336,7 +2915,7 @@ impl CommanderApp {
     fn cmd_grid(&mut self, ui: &mut egui::Ui) {
         let has_sel = self.sel.is_some();
         let has_pend = self.sel.map_or(false, |i| self.world.decisions.iter().any(|d| d.proj == i && !d.resolved));
-        let is_cold = self.sel.map_or(false, |i| self.rt[i].shown_age_min > 120.0);
+        let is_cold = self.sel.map_or(false, |i| self.shown.get(i).map_or(false, |s| s.age_min > 120.0));
         let bw4 = (ui.available_width() - 18.0) / 4.0;
         let mk = |txt: &str, col: Color32, w: f32| Button::new(RichText::new(txt).size(10.0).color(col)).min_size(vec2(w, 40.0));
         let btn4 = |txt: &str, col: Color32| mk(txt, col, bw4);
@@ -3396,7 +2975,7 @@ impl CommanderApp {
             .projects
             .iter()
             .enumerate()
-            .map(|(pi, p)| (pi, p.name.to_string(), p.color))
+            .map(|(pi, p)| (pi, p.name.to_string(), rgb(p.color)))
             .collect();
         Frame::new()
             .fill(a(GREEN, 12))
@@ -3434,7 +3013,7 @@ impl CommanderApp {
 
     fn card_project(&mut self, ui: &mut egui::Ui, i: usize) {
         let name = self.world.projects[i].name.clone();
-        let color = self.world.projects[i].color;
+        let color = rgb(self.world.projects[i].color);
         let status = self.world.projects[i].status.clone();
         let goal = self.world.projects[i].goal.clone();
         let age = self.age_str(i);
@@ -3455,9 +3034,10 @@ impl CommanderApp {
         });
 
         // delta-first resume header
-        let shown = self.rt[i].shown.clone();
-        let shown_age = self.rt[i].shown_age.clone();
-        let cold = self.rt[i].shown_age_min > 120.0;
+        let sh = self.shown.get(i).cloned().unwrap_or_default();
+        let shown = sh.lines;
+        let shown_age = sh.age;
+        let cold = sh.age_min > 120.0;
         let (rb, rf) = if cold {
             (Color32::from_rgba_unmultiplied(0x6b, 0x54, 0x20, 255), AMBER)
         } else {
@@ -3657,10 +3237,7 @@ impl CommanderApp {
                                     .on_hover_text("uninstall program")
                                     .clicked()
                                 {
-                                    self.world.projects[i].modules.retain(|x| x.name != m.name);
-                                    self.mod_status.remove(&(pname.clone(), m.name.clone()));
-                                    self.dirty = true;
-                                    self.wasm_sync();
+                                    self.api.send(Req::ModuleRm { i, name: m.name.clone() });
                                 }
                                 let tog = if m.enabled { "⏸" } else { "▶" };
                                 if ui
@@ -3668,11 +3245,7 @@ impl CommanderApp {
                                     .on_hover_text(if m.enabled { "disable" } else { "enable" })
                                     .clicked()
                                 {
-                                    if let Some(x) = self.world.projects[i].modules.iter_mut().find(|x| x.name == m.name) {
-                                        x.enabled = !x.enabled;
-                                    }
-                                    self.dirty = true;
-                                    self.wasm_sync();
+                                    self.api.send(Req::ModuleToggle { i, name: m.name.clone() });
                                 }
                                 let state = if !m.enabled {
                                     "PAUSED".to_string()
@@ -3777,7 +3350,7 @@ impl CommanderApp {
         }
         for i in 0..self.world.projects.len() {
             let name = self.world.projects[i].name.clone();
-            let color = self.world.projects[i].color;
+            let color = rgb(self.world.projects[i].color);
             let tier = self.tier(i);
             let n = self.rt[i].unseen_events;
             let ir = ui.horizontal(|ui| {
@@ -3928,7 +3501,10 @@ impl CommanderApp {
         let proj_name = self.world.projects[pi].name.clone();
         let status = self.world.projects[pi].status.clone();
         let goal = self.world.projects[pi].goal.clone();
-        let age = if self.rt[pi].shown_age.is_empty() { self.age_str(pi) } else { self.rt[pi].shown_age.clone() };
+        let age = match self.shown.get(pi) {
+            Some(s) if !s.age.is_empty() => s.age.clone(),
+            _ => self.age_str(pi),
+        };
         let h = ctx.screen_rect().height();
 
         egui::Window::new("recovery")
@@ -4041,10 +3617,10 @@ impl CommanderApp {
             });
     }
 
-    // ---------- control api ----------
-    fn handle_cmd(&mut self, cmd: Cmd, ctx: &egui::Context) -> String {
+    // ---------- control api (input injection) ----------
+    fn handle_cmd(&mut self, cmd: UiCmd, ctx: &egui::Context) -> String {
         match cmd {
-            Cmd::Key { name, ctrl } => {
+            UiCmd::Key { name, ctrl } => {
                 // the windowing layer turns ctrl+c / ctrl+x into Copy / Cut events
                 // (and ctrl+v into a Paste that host_paste replaces); mimic that
                 if ctrl && (name.eq_ignore_ascii_case("c") || name.eq_ignore_ascii_case("x")) {
@@ -4075,105 +3651,16 @@ impl CommanderApp {
                     None => format!("{{\"err\":\"unknown key '{}'\"}}", name),
                 }
             }
-            Cmd::Text(s) => {
+            UiCmd::Text(s) => {
                 ctx.input_mut(|i| i.events.push(egui::Event::Text(s)));
                 "{\"ok\":true}".into()
             }
-            Cmd::Click { x, y, double, world, ui: _ } => {
+            UiCmd::Click { x, y, double, world } => {
                 let p = if world { self.world_to_screen(pos2(x, y)) } else { pos2(x, y) };
                 self.canvas_click(p, double);
                 "{\"ok\":true}".into()
             }
-            Cmd::Place { x, y, name } => {
-                self.build_pos = pos2(x, y);
-                self.apply(Act::CommitBase(name));
-                format!("{{\"ok\":true,\"proj\":{}}}", self.world.projects.len() - 1)
-            }
-            Cmd::Destroy { i } => {
-                if i >= self.world.projects.len() {
-                    "{\"err\":\"no such base\"}".into()
-                } else {
-                    self.destroy_base(i);
-                    "{\"ok\":true}".into()
-                }
-            }
-            Cmd::Link { a, b } => {
-                if a >= self.world.projects.len() || b >= self.world.projects.len() {
-                    "{\"err\":\"no such base\"}".into()
-                } else {
-                    self.apply(Act::ToggleLink(a, b));
-                    "{\"ok\":true}".into()
-                }
-            }
-            Cmd::Decide { d, o } => {
-                if d >= self.world.decisions.len() || o >= self.world.decisions[d].options.len() {
-                    "{\"err\":\"no such decision/option\"}".into()
-                } else {
-                    self.apply(Act::CommitDecision(d, o));
-                    "{\"ok\":true}".into()
-                }
-            }
-            Cmd::Capture(s) => {
-                self.apply(Act::CommitCapture(s));
-                "{\"ok\":true}".into()
-            }
-            Cmd::ModuleAdd { i, cfg } => {
-                if i >= self.world.projects.len() {
-                    "{\"err\":\"no such base\"}".into()
-                } else if self.world.projects[i].modules.iter().any(|m| m.name == cfg.name) {
-                    "{\"err\":\"module name already installed\"}".into()
-                } else {
-                    let ts = self.clock();
-                    let name = cfg.name.clone();
-                    self.world.projects[i].modules.push(cfg);
-                    self.world.events.push(Event {
-                        ts,
-                        proj: Some(i),
-                        agent: None,
-                        text: format!("program installed: ⚙{}", name),
-                    });
-                    self.dirty = true;
-                    self.wasm_sync();
-                    "{\"ok\":true}".into()
-                }
-            }
-            Cmd::ModuleRm { i, name } => {
-                if i >= self.world.projects.len() {
-                    "{\"err\":\"no such base\"}".into()
-                } else {
-                    let before = self.world.projects[i].modules.len();
-                    self.world.projects[i].modules.retain(|m| m.name != name);
-                    if self.world.projects[i].modules.len() == before {
-                        "{\"err\":\"no such module\"}".into()
-                    } else {
-                        let pname = self.world.projects[i].name.clone();
-                        self.mod_status.remove(&(pname, name.clone()));
-                        let ts = self.clock();
-                        self.world.events.push(Event {
-                            ts,
-                            proj: Some(i),
-                            agent: None,
-                            text: format!("program uninstalled: ⚙{}", name),
-                        });
-                        self.dirty = true;
-                        self.wasm_sync();
-                        "{\"ok\":true}".into()
-                    }
-                }
-            }
-            Cmd::ModuleToggle { i, name } => {
-                match self.world.projects.get_mut(i).and_then(|p| p.modules.iter_mut().find(|m| m.name == name)) {
-                    Some(m) => {
-                        m.enabled = !m.enabled;
-                        let enabled = m.enabled;
-                        self.dirty = true;
-                        self.wasm_sync();
-                        format!("{{\"ok\":true,\"enabled\":{}}}", enabled)
-                    }
-                    None => "{\"err\":\"no such base/module\"}".into(),
-                }
-            }
-            Cmd::Band { x1, y1, x2, y2, world } => {
+            UiCmd::Band { x1, y1, x2, y2, world } => {
                 let (a0, b0) = if world {
                     (self.world_to_screen(pos2(x1, y1)), self.world_to_screen(pos2(x2, y2)))
                 } else {
@@ -4195,535 +3682,335 @@ impl CommanderApp {
                 }
                 format!("{{\"ok\":true,\"selected\":{}}}", self.sel_structs.len())
             }
-            Cmd::Cfg { struct_scale } => {
-                if let Some(v) = struct_scale {
-                    self.prefs.struct_scale = v.clamp(0.3, 5.0);
-                    self.dirty = true;
-                }
-                format!("{{\"ok\":true,\"struct_scale\":{}}}", self.prefs.struct_scale)
-            }
-            Cmd::Pylon { i, title, pos, state, notes } => {
-                if i >= self.world.projects.len() {
-                    "{\"err\":\"no such base\"}".into()
-                } else {
-                    let st = state.as_deref().and_then(TaskState::parse).unwrap_or(TaskState::Todo);
-                    let ts = self.clock();
-                    match self.world.projects[i].tasks.iter_mut().find(|t| t.title == title) {
-                        Some(t) => {
-                            t.state = st;
-                            if pos.is_some() {
-                                t.pos = pos;
-                            }
-                            if let Some(n) = notes {
-                                t.notes = n;
-                            }
-                        }
-                        None => {
-                            self.world.projects[i].tasks.push(Task { title: title.clone(), state: st, pos, notes: notes.unwrap_or_default() });
-                            self.world.events.push(Event {
-                                ts,
-                                proj: Some(i),
-                                agent: None,
-                                text: format!("pylon warped in: {}", title),
-                            });
-                            self.ping(i);
-                        }
-                    }
-                    self.dirty = true;
-                    "{\"ok\":true}".into()
-                }
-            }
-            Cmd::Question { i, text, pos, resolved, notes } => {
-                if i >= self.world.projects.len() {
-                    "{\"err\":\"no such base\"}".into()
-                } else {
-                    let ts = self.clock();
-                    match self.world.projects[i].questions.iter_mut().find(|q| q.text == text) {
-                        Some(q) => {
-                            if let Some(r) = resolved {
-                                q.resolved = r;
-                            }
-                            if pos.is_some() {
-                                q.pos = pos;
-                            }
-                            if let Some(n) = notes {
-                                q.notes = n;
-                            }
-                        }
-                        None => {
-                            self.world.projects[i].questions.push(Question {
-                                text: text.clone(),
-                                resolved: resolved.unwrap_or(false),
-                                pos,
-                                notes: notes.unwrap_or_default(),
-                            });
-                            self.world.events.push(Event {
-                                ts,
-                                proj: Some(i),
-                                agent: None,
-                                text: format!("sensor array raised: {}", text),
-                            });
-                            self.ping(i);
-                        }
-                    }
-                    self.dirty = true;
-                    "{\"ok\":true}".into()
-                }
-            }
-            Cmd::Base { i, cwd, sandbox, model } => match self.world.projects.get_mut(i) {
-                None => "{\"err\":\"no such base\"}".into(),
-                Some(p) => {
-                    if let Some(c) = cwd {
-                        p.cwd = if c.is_empty() { None } else { Some(c) };
-                    }
-                    if let Some(sb) = sandbox {
-                        p.sandbox = if sb.is_empty() { None } else { Some(sb) };
-                    }
-                    if let Some(m) = model {
-                        p.model = if m.is_empty() { None } else { Some(m) };
-                    }
-                    self.dirty = true;
-                    "{\"ok\":true}".into()
-                }
+            UiCmd::View => self.view_json().to_string(),
+        }
+    }
+
+    /// this frontend's own state, merged into /state by the control api
+    fn view_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "backend": self.api.base(),
+            "online": self.api.online(),
+            "version": self.version,
+            "sel": self.sel,
+            "interior": self.interior,
+            "link_from": self.link_from,
+            "cam": { "x": self.cam.pos.x, "y": self.cam.pos.y, "scale": self.cam.scale },
+            "viewport": [self.viewport.width(), self.viewport.height()],
+            "build_open": self.build_open,
+            "build_menu": self.build_menu,
+            "sel_structs": self.sel_structs.len(),
+            "sroom": match self.sroom {
+                Some(SRoom::Pylon(pi, ti)) => serde_json::json!({ "kind": "pylon", "proj": pi, "idx": ti }),
+                Some(SRoom::Question(pi, qi)) => serde_json::json!({ "kind": "question", "proj": pi, "idx": qi }),
+                None => serde_json::Value::Null,
             },
-            Cmd::Dispatch { i, title, agent, prompt } => {
-                let ti = self.world.projects.get(i).and_then(|p| p.tasks.iter().position(|t| t.title == title));
-                match ti {
-                    None => "{\"err\":\"no such base/pylon\"}".into(),
-                    Some(ti) => match self.dispatch(i, ti, agent, prompt) {
-                        Ok(aid) => format!("{{\"ok\":true,\"agent\":\"{}\"}}", aid),
-                        Err(e) => format!("{{\"err\":\"{}\"}}", e.replace('"', "'")),
-                    },
+        })
+    }
+
+    // ---------- daemon sync ----------
+
+    fn running(&self, proj: &str, aid: &str) -> bool {
+        self.running.contains(&(proj.to_string(), aid.to_string()))
+    }
+
+    /// remember a local edit so incoming snapshots don't undo it before the
+    /// daemon has it. the value is read from the mirror right now.
+    fn overlay(&mut self, key: OverlayKey) {
+        let val = match key {
+            OverlayKey::Base(i) => self.world.projects.get(i).map(|p| OverlayVal::Pos(p.pos)),
+            OverlayKey::Capture(ci) => self.world.captures.get(ci).map(|c| OverlayVal::Pos(c.pos)),
+            OverlayKey::Struct(i, Target::Pylon(ti)) => {
+                self.world.projects.get(i).and_then(|p| p.tasks.get(ti)).and_then(|t| t.pos).map(OverlayVal::Pos)
+            }
+            OverlayKey::Struct(i, Target::Question(qi)) => {
+                self.world.projects.get(i).and_then(|p| p.questions.get(qi)).and_then(|q| q.pos).map(OverlayVal::Pos)
+            }
+            OverlayKey::Notes(i, Target::Pylon(ti)) => {
+                self.world.projects.get(i).and_then(|p| p.tasks.get(ti)).map(|t| OverlayVal::Text(t.notes.clone()))
+            }
+            OverlayKey::Notes(i, Target::Question(qi)) => {
+                self.world.projects.get(i).and_then(|p| p.questions.get(qi)).map(|q| OverlayVal::Text(q.notes.clone()))
+            }
+            OverlayKey::Scale => Some(OverlayVal::Scale(self.prefs.struct_scale)),
+        };
+        if let Some(val) = val {
+            self.overlays.insert(key, Overlay { val, settle: None });
+        }
+    }
+
+    /// the daemon acknowledged the edit under `key`; it is in snapshot `v`
+    fn settle(&mut self, key: OverlayKey, v: u64) {
+        if let Some(o) = self.overlays.get_mut(&key) {
+            // a newer local edit is still unsent: keep waiting for its own ack
+            if o.settle.is_none() {
+                o.settle = Some(v);
+            }
+        }
+    }
+
+    fn apply_overlays(&mut self, world: &mut World, prefs: &mut Prefs) {
+        for (key, o) in &self.overlays {
+            match (key, &o.val) {
+                (OverlayKey::Base(i), OverlayVal::Pos(p)) => {
+                    if let Some(pr) = world.projects.get_mut(*i) {
+                        pr.pos = *p;
+                    }
+                }
+                (OverlayKey::Capture(ci), OverlayVal::Pos(p)) => {
+                    if let Some(c) = world.captures.get_mut(*ci) {
+                        c.pos = *p;
+                    }
+                }
+                (OverlayKey::Struct(i, Target::Pylon(ti)), OverlayVal::Pos(p)) => {
+                    if let Some(t) = world.projects.get_mut(*i).and_then(|pr| pr.tasks.get_mut(*ti)) {
+                        t.pos = Some(*p);
+                    }
+                }
+                (OverlayKey::Struct(i, Target::Question(qi)), OverlayVal::Pos(p)) => {
+                    if let Some(q) = world.projects.get_mut(*i).and_then(|pr| pr.questions.get_mut(*qi)) {
+                        q.pos = Some(*p);
+                    }
+                }
+                (OverlayKey::Notes(i, Target::Pylon(ti)), OverlayVal::Text(s)) => {
+                    if let Some(t) = world.projects.get_mut(*i).and_then(|pr| pr.tasks.get_mut(*ti)) {
+                        t.notes = s.clone();
+                    }
+                }
+                (OverlayKey::Notes(i, Target::Question(qi)), OverlayVal::Text(s)) => {
+                    if let Some(q) = world.projects.get_mut(*i).and_then(|pr| pr.questions.get_mut(*qi)) {
+                        q.notes = s.clone();
+                    }
+                }
+                (OverlayKey::Scale, OverlayVal::Scale(s)) => prefs.struct_scale = *s,
+                _ => {}
+            }
+        }
+    }
+
+    /// send the brief text of the room being edited (debounced by the caller)
+    fn flush_notes(&mut self) {
+        let Some((room, _)) = self.notes_due.take() else { return };
+        let (pi, at) = room.target();
+        let text = match room {
+            SRoom::Pylon(pi, ti) => self.world.projects.get(pi).and_then(|p| p.tasks.get(ti)).map(|t| t.notes.clone()),
+            SRoom::Question(pi, qi) => self.world.projects.get(pi).and_then(|p| p.questions.get(qi)).map(|q| q.notes.clone()),
+        };
+        if let Some(text) = text {
+            self.api.send(Req::edit(pi, at).notes(text));
+        }
+    }
+
+    /// a new world version from the daemon: remap this view onto it, replay
+    /// local overlays, and turn fresh notices into toasts and pings
+    fn apply_snapshot(&mut self, s: Snapshot) {
+        // a version that went backwards is a restarted daemon: attach afresh
+        // (its notice sequence starts over too, and no ack we wait for will come)
+        let restarted = self.synced && s.version < self.version;
+        if restarted {
+            self.overlays.clear();
+            self.notes_due = None;
+            self.scale_due = None;
+            self.last_notice = 0;
+        }
+        let first = !self.synced || restarted;
+        let old_ids: Vec<u64> = self.world.projects.iter().map(|p| p.id).collect();
+        let new_ids: Vec<u64> = s.world.projects.iter().map(|p| p.id).collect();
+        if old_ids != new_ids {
+            // bases were established or destroyed: every local base index follows its id
+            let map = |i: usize| -> Option<usize> { old_ids.get(i).and_then(|id| new_ids.iter().position(|x| x == id)) };
+            self.sel = self.sel.and_then(map);
+            self.interior = self.interior.and_then(map);
+            self.link_from = self.link_from.and_then(map);
+            self.drag_base = self.drag_base.and_then(map);
+            self.recovery = self.recovery.and_then(map);
+            self.highlight = self.highlight.take().and_then(|(p, a)| map(p).map(|p| (p, a)));
+            for (_, _, sel) in &mut self.back {
+                *sel = sel.and_then(map);
+            }
+            self.toasts.retain(|t| t.proj.map_or(true, |p| map(p).is_some()));
+            for t in &mut self.toasts {
+                t.proj = t.proj.and_then(map);
+            }
+            self.wpings.retain(|p| map(p.proj).is_some());
+            for p in &mut self.wpings {
+                p.proj = map(p.proj).unwrap_or(p.proj);
+            }
+            self.mpings.retain(|p| map(p.proj).is_some());
+            for p in &mut self.mpings {
+                p.proj = map(p.proj).unwrap_or(p.proj);
+            }
+            self.sroom = self.sroom.take().and_then(|r| match r {
+                SRoom::Pylon(pi, ti) => map(pi).map(|pi| SRoom::Pylon(pi, ti)),
+                SRoom::Question(pi, qi) => map(pi).map(|pi| SRoom::Question(pi, qi)),
+            });
+            self.sel_structs = self
+                .sel_structs
+                .drain(..)
+                .filter_map(|r| match r {
+                    SRoom::Pylon(pi, ti) => map(pi).map(|pi| SRoom::Pylon(pi, ti)),
+                    SRoom::Question(pi, qi) => map(pi).map(|pi| SRoom::Question(pi, qi)),
+                })
+                .collect();
+            let mut overlays = HashMap::new();
+            for (k, o) in self.overlays.drain() {
+                let nk = match k {
+                    OverlayKey::Base(i) => map(i).map(OverlayKey::Base),
+                    OverlayKey::Struct(i, at) => map(i).map(|i| OverlayKey::Struct(i, at)),
+                    OverlayKey::Notes(i, at) => map(i).map(|i| OverlayKey::Notes(i, at)),
+                    k => Some(k),
+                };
+                if let Some(nk) = nk {
+                    overlays.insert(nk, o);
                 }
             }
-            Cmd::Tell { i, agent, text } => match self.tell(i, &agent, &text) {
-                Ok(()) => "{\"ok\":true}".into(),
-                Err(e) => format!("{{\"err\":\"{}\"}}", e.replace('"', "'")),
-            },
-            Cmd::Halt { i, agent } => {
-                if self.halt(i, &agent) {
-                    "{\"ok\":true}".into()
+            self.overlays = overlays;
+            self.notes_due = self.notes_due.take().and_then(|(r, t)| match r {
+                SRoom::Pylon(pi, ti) => map(pi).map(|pi| (SRoom::Pylon(pi, ti), t)),
+                SRoom::Question(pi, qi) => map(pi).map(|pi| (SRoom::Question(pi, qi), t)),
+            });
+            self.last_num = None;
+            self.idle_idx = usize::MAX;
+            self.destroy_arm = None;
+            let mut shown = Vec::with_capacity(new_ids.len());
+            for id in &new_ids {
+                shown.push(old_ids.iter().position(|x| x == id).map(|oi| std::mem::take(&mut self.shown[oi])).unwrap_or_default());
+            }
+            self.shown = shown;
+        }
+        if s.world.decisions.len() != self.world.decisions.len() {
+            self.briefing = None;
+        }
+        if self.shown.len() != new_ids.len() {
+            self.shown.resize_with(new_ids.len(), Shown::default);
+        }
+
+        // edits the daemon has confirmed are in this version: drop their overlays
+        self.overlays.retain(|_, o| o.settle.map_or(true, |v| s.version < v));
+        self.mod_status = s.module_status();
+        let mut world = s.world;
+        let mut prefs = s.prefs;
+        self.apply_overlays(&mut world, &mut prefs);
+        self.world = world;
+        self.prefs = prefs;
+        self.rt = s.rt;
+        self.unseen = s.unseen;
+        self.running = s.running.into_iter().collect();
+        self.codex = s.codex;
+        self.space_path = s.space_path;
+        self.version = s.version;
+        self.synced = true;
+
+        // notices → toasts / pings (history before this session's first snapshot is not replayed)
+        for n in s.notices {
+            if n.seq <= self.last_notice {
+                continue;
+            }
+            self.last_notice = n.seq;
+            if first {
+                continue;
+            }
+            let proj = n.proj.filter(|&p| p < self.world.projects.len());
+            if n.ping {
+                if let Some(p) = proj {
+                    self.ping(p);
+                }
+            }
+            if n.loud {
+                if n.report {
+                    let in_view = proj.is_some() && self.sel == proj;
+                    let sub = if in_view { "in current view — updated in place" } else { "SPACE jumps to it · click this toast" };
+                    self.toast(&n.head, &n.body, sub, in_view, proj);
                 } else {
-                    "{\"err\":\"unit is not working\"}".into()
+                    self.toast(&n.head, &n.body, &n.sub, n.ok, proj);
                 }
             }
-            Cmd::Fire { i, agent } => match self.world.projects.get_mut(i) {
-                None => "{\"err\":\"no such base\"}".into(),
-                Some(p) => {
-                    let name = p.name.clone();
-                    let before = p.agents.len();
-                    p.agents.retain(|a| a.id != agent);
-                    if p.agents.len() == before {
-                        "{\"err\":\"no such unit\"}".into()
+        }
+
+        // the base in view consumes its delta as it lands; a report landing in
+        // the open pylon room counts as read at once
+        if let Some(i) = self.sel {
+            if i < self.rt.len() && self.rt[i].unseen_events > 0 {
+                self.visit(i, false);
+            }
+        }
+        if let Some(SRoom::Pylon(pi, ti)) = self.sroom {
+            if let Some(t) = self.world.projects.get_mut(pi).and_then(|p| p.tasks.get_mut(ti)) {
+                if t.unread {
+                    t.unread = false;
+                    self.api.send(Req::edit(pi, Target::Pylon(ti)).read());
+                }
+            }
+        }
+        if let Some(i) = self.pending_focus {
+            if i < self.world.projects.len() {
+                self.pending_focus = None;
+                self.focus(i, 0.95, false);
+            }
+        }
+        if first {
+            self.fit_all();
+            self.cam.pos = self.cam.target_pos;
+            self.cam.scale = self.cam.target_scale;
+        }
+    }
+
+    /// drain the daemon channels: snapshots, then command replies
+    fn pump_api(&mut self) {
+        if let Some(s) = self.api.snapshot() {
+            self.apply_snapshot(s);
+        }
+        for Reply { req, result } in self.api.replies() {
+            let v = result.as_ref().ok().and_then(|v| v.get("v")).and_then(|v| v.as_u64());
+            if result.is_err() {
+                // a refused edit must not pin its stale value over the daemon's truth
+                match &req {
+                    Req::MoveBase { i, .. } => {
+                        self.overlays.remove(&OverlayKey::Base(*i));
+                    }
+                    Req::MoveCapture { ci, .. } => {
+                        self.overlays.remove(&OverlayKey::Capture(*ci));
+                    }
+                    Req::Struct { i, at, .. } => {
+                        self.overlays.remove(&OverlayKey::Notes(*i, *at));
+                        self.overlays.remove(&OverlayKey::Struct(*i, *at));
+                    }
+                    Req::Cfg { .. } => {
+                        self.overlays.remove(&OverlayKey::Scale);
+                    }
+                    _ => {}
+                }
+            }
+            match (&req, &result) {
+                (Req::Place { .. }, Ok(v)) => {
+                    if let Some(i) = v.get("proj").and_then(|x| x.as_u64()) {
+                        self.pending_focus = Some(i as usize);
+                    }
+                }
+                (Req::MoveBase { i, .. }, Ok(_)) => self.settle(OverlayKey::Base(*i), v.unwrap_or(0)),
+                (Req::MoveCapture { ci, .. }, Ok(_)) => self.settle(OverlayKey::Capture(*ci), v.unwrap_or(0)),
+                (Req::Struct { i, at, notes, pos, .. }, Ok(_)) => {
+                    if notes.is_some() {
+                        self.settle(OverlayKey::Notes(*i, *at), v.unwrap_or(0));
+                    }
+                    if pos.is_some() {
+                        self.settle(OverlayKey::Struct(*i, *at), v.unwrap_or(0));
+                    }
+                }
+                (Req::Cfg { struct_scale: Some(_), .. }, Ok(_)) => self.settle(OverlayKey::Scale, v.unwrap_or(0)),
+                (Req::Dispatch { i, cont, .. }, Err(e)) => {
+                    if *cont {
+                        self.toast("⚠ CONTINUE FAILED", e, "a continuation needs a previous report to start from", false, Some(*i));
                     } else {
-                        self.workers.halt(&name, &agent);
-                        self.dirty = true;
-                        "{\"ok\":true}".into()
+                        self.toast("⚠ DISPATCH FAILED", e, "set the base repo: /base?i=..&cwd=/path", false, Some(*i));
                     }
                 }
-            },
-            Cmd::State => self.state_json(),
-        }
-    }
-
-    // ---------- codex workers ----------
-
-    /// send a unit to work pylon `ti` of base `pi`: picks `agent` (or the first
-    /// idle unit, or hires a new one), starts a fresh codex thread, pylon → doing
-    fn dispatch(&mut self, pi: usize, ti: usize, agent: Option<String>, extra: Option<String>) -> Result<String, String> {
-        let proj = self.world.projects.get(pi).ok_or("no such base")?;
-        let task = proj.tasks.get(ti).ok_or("no such pylon")?;
-        let (title, notes) = (task.title.clone(), task.notes.clone());
-        let cwd = proj.cwd.clone().ok_or_else(|| format!("base {} has no repo (cwd) set", proj.name))?;
-        let name = proj.name.clone();
-        // a pylon already being worked is not handed to a second unit
-        if let Some(ag) = proj.agents.iter().find(|a| a.task == title && self.workers.running(&name, &a.id)) {
-            return Err(format!("{} is already working this pylon", ag.id));
-        }
-        let aid = match agent {
-            Some(a) => a,
-            // the unit that last held this pylon keeps it (fresh thread); else an idle one; else hire
-            None => match proj
-                .agents
-                .iter()
-                .find(|a| a.task == title)
-                .or_else(|| proj.agents.iter().find(|a| a.state == AgentState::Idle && !self.workers.running(&name, &a.id)))
-            {
-                Some(a) => a.id.clone(),
-                None => {
-                    let mut n = proj.agents.len() + 1;
-                    while proj.agents.iter().any(|a| a.id == format!("cx-{}", n)) {
-                        n += 1;
-                    }
-                    format!("cx-{}", n)
-                }
-            },
-        };
-        if self.workers.running(&name, &aid) {
-            return Err(format!("{} is already working", aid));
-        }
-        let prompt = crate::worker::prompt(&aid, &name, &proj.goal, &title, &notes, extra.as_deref().unwrap_or(""));
-        let job = crate::worker::Job {
-            proj: name.clone(),
-            agent: aid.clone(),
-            cwd,
-            sandbox: proj.sandbox.clone().unwrap_or_else(|| "workspace-write".into()),
-            model: proj.model.clone(),
-            prompt,
-            resume: None,
-        };
-        self.workers.start(job)?;
-        let ts = self.clock();
-        let p = &mut self.world.projects[pi];
-        let hired = !p.agents.iter().any(|a| a.id == aid);
-        if hired {
-            p.agents.push(Agent::new(aid.clone()));
-        }
-        let ag = p.agents.iter_mut().find(|a| a.id == aid).unwrap();
-        ag.state = AgentState::Working;
-        ag.task = title.clone();
-        ag.blocked_on = None;
-        ag.thread_id = None;
-        ag.last_msg.clear();
-        ag.last_report = ts;
-        p.tasks[ti].state = TaskState::Doing;
-        self.report(pi, Some(&aid), &format!("{}dispatched → {}", if hired { "hired · " } else { "" }, title));
-        Ok(aid)
-    }
-
-    /// follow-up order for a unit: resumes its codex thread with `text`
-    fn tell(&mut self, pi: usize, aid: &str, text: &str) -> Result<(), String> {
-        let proj = self.world.projects.get(pi).ok_or("no such base")?;
-        let ag = proj.agents.iter().find(|a| a.id == aid).ok_or("no such unit")?;
-        let thread = ag.thread_id.clone().ok_or("unit has no codex thread yet — dispatch it first")?;
-        let cwd = proj.cwd.clone().ok_or("base has no repo (cwd) set")?;
-        let name = proj.name.clone();
-        let job = crate::worker::Job {
-            proj: name,
-            agent: aid.to_string(),
-            cwd,
-            sandbox: proj.sandbox.clone().unwrap_or_else(|| "workspace-write".into()),
-            model: proj.model.clone(),
-            prompt: format!(
-                "Commander's follow-up order: {}\n\nSame closing rule as before: end with one DONE: / BLOCKED: / PARTIAL: line.",
-                text
-            ),
-            resume: Some(thread),
-        };
-        self.workers.start(job)?;
-        let ts = self.clock();
-        let p = &mut self.world.projects[pi];
-        let task = {
-            let ag = p.agents.iter_mut().find(|a| a.id == aid).unwrap();
-            ag.state = AgentState::Working;
-            ag.blocked_on = None;
-            ag.last_report = ts;
-            ag.task.clone()
-        };
-        if let Some(t) = p.tasks.iter_mut().find(|t| t.title == task) {
-            if t.state == TaskState::Blocked {
-                t.state = TaskState::Doing;
+                (Req::Link { .. }, Err(e)) => self.toast("⛓ LINK", e, "", false, None),
+                (Req::Halt { i, agent }, Err(e)) => self.toast(&format!("■ HALT {}", agent), e, "", false, Some(*i)),
+                (_, Err(e)) => self.toast("⚠ DAEMON REFUSED", e, &req.url(), false, None),
+                _ => {}
             }
         }
-        let short: String = text.chars().take(120).collect();
-        self.report(pi, Some(aid), &format!("order: {}", short));
-        Ok(())
-    }
-
-    fn halt(&mut self, pi: usize, aid: &str) -> bool {
-        let Some(name) = self.world.projects.get(pi).map(|p| p.name.clone()) else { return false };
-        let ok = self.workers.halt(&name, aid);
-        if ok {
-            self.report(pi, Some(aid), "halted by commander");
-        }
-        ok
-    }
-
-    fn agent_mut(&mut self, proj: &str, aid: &str) -> Option<(usize, &mut Agent)> {
-        let pi = self.proj_by_name(proj)?;
-        let ag = self.world.projects[pi].agents.iter_mut().find(|a| a.id == aid)?;
-        Some((pi, ag))
-    }
-
-    /// drain codex event streams into units, pylons and the comms wall
-    fn worker_pump(&mut self) {
-        use crate::worker::{verdict, Out, Verdict};
-        for out in self.workers.drain() {
-            match out {
-                Out::Started { proj, agent, thread_id } => {
-                    if let Some((_, ag)) = self.agent_mut(&proj, &agent) {
-                        ag.thread_id = Some(thread_id);
-                        self.dirty = true;
-                    }
-                }
-                Out::Cmd { proj, agent, command, exit_code, ok } => {
-                    if let Some(pi) = self.proj_by_name(&proj) {
-                        let short: String = command.chars().take(90).collect();
-                        let tail = match (ok, exit_code) {
-                            (true, _) => String::new(),
-                            (false, Some(c)) => format!(" ✗ exit {}", c),
-                            (false, None) => " ✗".into(),
-                        };
-                        self.report_quiet(pi, Some(&agent), &format!("$ {}{}", short, tail));
-                    }
-                }
-                Out::Files { proj, agent, paths } => {
-                    if let Some(pi) = self.proj_by_name(&proj) {
-                        let names: Vec<String> = paths
-                            .iter()
-                            .map(|p| p.rsplit('/').next().unwrap_or(p).to_string())
-                            .take(6)
-                            .collect();
-                        let more = if paths.len() > 6 { format!(" +{}", paths.len() - 6) } else { String::new() };
-                        self.report_quiet(pi, Some(&agent), &format!("✎ {}{}", names.join(", "), more));
-                    }
-                }
-                Out::Msg { proj, agent, text } => {
-                    if let Some((pi, ag)) = self.agent_mut(&proj, &agent) {
-                        ag.last_msg = text.clone();
-                        let first = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
-                        let short: String = first.chars().take(160).collect();
-                        self.report_quiet(pi, Some(&agent), &short);
-                    }
-                }
-                Out::Error { proj, agent, text } => {
-                    if let Some((pi, ag)) = self.agent_mut(&proj, &agent) {
-                        ag.state = AgentState::Blocked;
-                        ag.blocked_on = Some(text.clone());
-                        let task = ag.task.clone();
-                        if let Some(t) = self.world.projects[pi].tasks.iter_mut().find(|t| t.title == task) {
-                            t.state = TaskState::Blocked;
-                        }
-                        let short: String = text.chars().take(200).collect();
-                        self.report(pi, Some(&agent), &format!("✗ {}", short));
-                    }
-                }
-                Out::Turn { proj, agent, input_tokens, output_tokens } => {
-                    if let Some((pi, ag)) = self.agent_mut(&proj, &agent) {
-                        ag.turns += 1;
-                        ag.tokens += input_tokens + output_tokens;
-                        let task = ag.task.clone();
-                        let v = verdict(&ag.last_msg);
-                        let (st, summary) = match &v {
-                            Some((Verdict::Done, s)) => (AgentState::Idle, format!("✓ DONE: {}", s)),
-                            Some((Verdict::Blocked, s)) => (AgentState::Blocked, format!("⚠ BLOCKED: {}", s)),
-                            Some((Verdict::Partial, s)) => (AgentState::Idle, format!("… PARTIAL: {}", s)),
-                            None => (AgentState::Idle, "turn complete (no status line)".into()),
-                        };
-                        ag.state = st;
-                        ag.blocked_on = match &v {
-                            Some((Verdict::Blocked, s)) => Some(s.clone()),
-                            _ => None,
-                        };
-                        let tstate = match &v {
-                            Some((Verdict::Done, _)) => Some(TaskState::Done),
-                            Some((Verdict::Blocked, _)) => Some(TaskState::Blocked),
-                            _ => None,
-                        };
-                        if let Some(ts) = tstate {
-                            if let Some(t) = self.world.projects[pi].tasks.iter_mut().find(|t| t.title == task) {
-                                t.state = ts;
-                            }
-                        }
-                        let short: String = summary.chars().take(220).collect();
-                        self.report(pi, Some(&agent), &format!("{} · {} tok", short, input_tokens + output_tokens));
-                    }
-                }
-                Out::Exited { proj, agent, code, stderr_tail } => {
-                    if let Some((pi, ag)) = self.agent_mut(&proj, &agent) {
-                        // still "working" here = process died without turn.completed
-                        if ag.state == AgentState::Working {
-                            ag.state = AgentState::Idle;
-                            let last = stderr_tail.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").trim();
-                            let short: String = last.chars().take(160).collect();
-                            self.report(pi, Some(&agent), &format!("process exited (code {:?}) {}", code, short));
-                        }
-                        self.dirty = true;
-                    }
-                }
-                Out::Eof { .. } => {}
-            }
-        }
-    }
-
-    fn state_json(&self) -> String {
-        fn j(s: &str) -> String {
-            let mut o = String::with_capacity(s.len() + 2);
-            for c in s.chars() {
-                match c {
-                    '"' => o.push_str("\\\""),
-                    '\\' => o.push_str("\\\\"),
-                    '\n' => o.push_str("\\n"),
-                    c if (c as u32) < 0x20 => o.push_str(&format!("\\u{:04x}", c as u32)),
-                    c => o.push(c),
-                }
-            }
-            o
-        }
-        fn opt(v: Option<usize>) -> String {
-            v.map(|x| x.to_string()).unwrap_or_else(|| "null".into())
-        }
-        let projects: Vec<String> = self
-            .world
-            .projects
-            .iter()
-            .enumerate()
-            .map(|(i, p)| {
-                let agents: Vec<String> = p
-                    .agents
-                    .iter()
-                    .map(|a| {
-                        format!(
-                            "{{\"id\":\"{}\",\"state\":\"{}\",\"task\":\"{}\",\"blocked_on\":{},\"running\":{},\"thread_id\":{},\"turns\":{},\"tokens\":{},\"last_report\":\"{}\",\"last_msg\":\"{}\"}}",
-                            j(&a.id),
-                            a.state.label(),
-                            j(&a.task),
-                            a.blocked_on.as_ref().map(|b| format!("\"{}\"", j(b))).unwrap_or_else(|| "null".into()),
-                            self.workers.running(&p.name, &a.id),
-                            a.thread_id.as_ref().map(|b| format!("\"{}\"", j(b))).unwrap_or_else(|| "null".into()),
-                            a.turns,
-                            a.tokens,
-                            j(&a.last_report),
-                            j(&a.last_msg),
-                        )
-                    })
-                    .collect();
-                let tasks: Vec<String> = p
-                    .tasks
-                    .iter()
-                    .enumerate()
-                    .map(|(ti, t)| {
-                        let (x, y) = t.pos.unwrap_or_else(|| self.pylon_world_pos(i, ti));
-                        format!("{{\"title\":\"{}\",\"state\":\"{}\",\"notes\":\"{}\",\"pos\":[{:.1},{:.1}]}}", j(&t.title), t.state.label(), j(&t.notes), x, y)
-                    })
-                    .collect();
-                let questions: Vec<String> = p
-                    .questions
-                    .iter()
-                    .enumerate()
-                    .map(|(qi, q)| {
-                        let (x, y) = q.pos.unwrap_or_else(|| self.question_world_pos(i, qi));
-                        format!("{{\"text\":\"{}\",\"resolved\":{},\"notes\":\"{}\",\"pos\":[{:.1},{:.1}]}}", j(&q.text), q.resolved, j(&q.notes), x, y)
-                    })
-                    .collect();
-                let modules: Vec<String> = p
-                    .modules
-                    .iter()
-                    .map(|m| {
-                        let st = self.mod_status.get(&(p.name.clone(), m.name.clone()));
-                        format!(
-                            "{{\"name\":\"{}\",\"path\":\"{}\",\"enabled\":{},\"interval_sec\":{},\"fuel_per_tick\":{},\"max_http_per_tick\":{},\"ticks\":{},\"fuel_used\":{},\"http_used\":{},\"ms\":{:.1},\"error\":{}}}",
-                            j(&m.name),
-                            j(&m.path),
-                            m.enabled,
-                            m.interval_sec,
-                            m.fuel_per_tick,
-                            m.max_http_per_tick,
-                            st.map_or(0, |s| s.ticks),
-                            st.map_or(0, |s| s.fuel_used),
-                            st.map_or(0, |s| s.http_used),
-                            st.map_or(0.0, |s| s.ms),
-                            st.and_then(|s| s.error.as_ref()).map(|e| format!("\"{}\"", j(e))).unwrap_or_else(|| "null".into()),
-                        )
-                    })
-                    .collect();
-                format!(
-                    "{{\"i\":{},\"name\":\"{}\",\"status\":\"{}\",\"goal\":\"{}\",\"pos\":[{:.1},{:.1}],\"tier\":\"{}\",\"unseen\":{},\"cwd\":{},\"sandbox\":{},\"model\":{},\"agents\":[{}],\"tasks\":[{}],\"questions\":[{}],\"modules\":[{}]}}",
-                    i,
-                    j(&p.name),
-                    j(&p.status),
-                    j(&p.goal),
-                    p.pos.0,
-                    p.pos.1,
-                    self.tier(i).label(),
-                    self.rt[i].unseen_events,
-                    p.cwd.as_ref().map(|b| format!("\"{}\"", j(b))).unwrap_or_else(|| "null".into()),
-                    p.sandbox.as_ref().map(|b| format!("\"{}\"", j(b))).unwrap_or_else(|| "null".into()),
-                    p.model.as_ref().map(|b| format!("\"{}\"", j(b))).unwrap_or_else(|| "null".into()),
-                    agents.join(","),
-                    tasks.join(","),
-                    questions.join(","),
-                    modules.join(","),
-                )
-            })
-            .collect();
-        let links: Vec<String> = self.world.links.iter().map(|l| format!("[{},{}]", l.a, l.b)).collect();
-        let decisions: Vec<String> = self
-            .world
-            .decisions
-            .iter()
-            .enumerate()
-            .map(|(di, d)| {
-                format!(
-                    "{{\"i\":{},\"id\":\"{}\",\"proj\":{},\"title\":\"{}\",\"due\":\"{}\",\"resolved\":{},\"chosen\":{}}}",
-                    di,
-                    j(&d.id),
-                    d.proj,
-                    j(&d.title),
-                    j(&d.due),
-                    d.resolved,
-                    d.chosen.as_ref().map(|c| format!("\"{}\"", j(c))).unwrap_or_else(|| "null".into()),
-                )
-            })
-            .collect();
-        let captures: Vec<String> = self
-            .world
-            .captures
-            .iter()
-            .map(|c| format!("{{\"text\":\"{}\",\"ts\":\"{}\",\"pos\":[{:.1},{:.1}]}}", j(&c.text), j(&c.ts), c.pos.0, c.pos.1))
-            .collect();
-        let events: Vec<String> = self
-            .world
-            .events
-            .iter()
-            .rev()
-            .take(10)
-            .map(|e| {
-                format!(
-                    "{{\"ts\":\"{}\",\"proj\":{},\"agent\":{},\"text\":\"{}\"}}",
-                    j(&e.ts),
-                    opt(e.proj),
-                    e.agent.as_ref().map(|a| format!("\"{}\"", j(a))).unwrap_or_else(|| "null".into()),
-                    j(&e.text),
-                )
-            })
-            .collect();
-        format!(
-            "{{\"clock\":\"{}\",\"sel\":{},\"interior\":{},\"link_from\":{},\"cam\":{{\"x\":{:.1},\"y\":{:.1},\"scale\":{:.3}}},\"viewport\":[{:.0},{:.0}],\"build_open\":{},\"build_menu\":{},\"struct_scale\":{},\"sel_structs\":{},\"codex\":{},\"workers_running\":{},\"sroom\":{},\"projects\":[{}],\"links\":[{}],\"decisions\":[{}],\"captures\":[{}],\"events\":[{}]}}",
-            self.clock(),
-            opt(self.sel),
-            opt(self.interior),
-            opt(self.link_from),
-            self.cam.pos.x,
-            self.cam.pos.y,
-            self.cam.scale,
-            self.viewport.width(),
-            self.viewport.height(),
-            self.build_open,
-            self.build_menu,
-            self.prefs.struct_scale,
-            self.sel_structs.len(),
-            match self.codex.lock().unwrap().clone() {
-                Some(u) => format!(
-                    "{{\"pct_left\":{:.1},\"resets_at\":{},\"eta\":\"{}\"}}",
-                    u.pct_left,
-                    u.resets_at,
-                    crate::codex::eta(u.resets_at)
-                ),
-                None => "null".into(),
-            },
-            self.workers.running_count(),
-            match self.sroom {
-                Some(SRoom::Pylon(pi, ti)) => format!("{{\"kind\":\"pylon\",\"proj\":{},\"idx\":{}}}", pi, ti),
-                Some(SRoom::Question(pi, qi)) => format!("{{\"kind\":\"question\",\"proj\":{},\"idx\":{}}}", pi, qi),
-                None => "null".into(),
-            },
-            projects.join(","),
-            links.join(","),
-            decisions.join(","),
-            captures.join(","),
-            events.join(","),
-        )
     }
 
     fn capture_window(&mut self, ctx: &egui::Context) {
@@ -4875,6 +4162,9 @@ impl eframe::App for CommanderApp {
         self.time = ctx.input(|i| i.time);
         self.now_min = now_min();
 
+        // the daemon's latest world, and the replies to what we sent it
+        self.pump_api();
+
         // control api: apply injected commands before building the UI so
         // injected key/text events are seen by this frame's widgets
         while let Ok(req) = self.ctrl.try_recv() {
@@ -4911,26 +4201,36 @@ impl eframe::App for CommanderApp {
             self.apply(act);
         }
 
-        // codex workers: ingest their event streams
-        self.worker_pump();
-
-        // wasm module host: ingest outputs, then refresh building snapshots ~1/s
-        self.wasm_pump();
-        if self.time - self.last_wasm_sync > 1.0 {
-            self.wasm_sync();
+        // debounced sends: the brief being typed, the size slider being dragged
+        if let Some((room, t)) = self.notes_due {
+            if self.sroom != Some(room) || self.time - t > 0.5 {
+                self.flush_notes();
+            }
         }
-
-        // debounced autosave of the space
-        if self.dirty && self.time - self.last_save > 2.0 {
-            self.save_space();
+        if let Some(t) = self.scale_due {
+            if self.time - t > 0.25 {
+                self.scale_due = None;
+                self.api.send(Req::Cfg { struct_scale: Some(self.prefs.struct_scale), show_rail: None });
+            }
         }
 
         ctx.request_repaint();
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        if self.dirty {
-            self.save_space();
+        // the last words go out synchronously — the sender thread dies with us
+        if let Some((room, _)) = self.notes_due.take() {
+            let (pi, at) = room.target();
+            let text = match room {
+                SRoom::Pylon(pi, ti) => self.world.projects.get(pi).and_then(|p| p.tasks.get(ti)).map(|t| t.notes.clone()),
+                SRoom::Question(pi, qi) => self.world.projects.get(pi).and_then(|p| p.questions.get(qi)).map(|q| q.notes.clone()),
+            };
+            if let Some(text) = text {
+                let _ = self.api.send_sync(Req::edit(pi, at).notes(text));
+            }
+        }
+        if self.scale_due.take().is_some() {
+            let _ = self.api.send_sync(Req::Cfg { struct_scale: Some(self.prefs.struct_scale), show_rail: None });
         }
     }
 }

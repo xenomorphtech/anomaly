@@ -1,13 +1,15 @@
 #!/bin/sh
-# Smoke-test commander through its HTTP control API (no real input needed).
-# Prereq: app running (see test-weston.sh); API on COMMANDER_HTTP, default:
-A=${A:-http://127.0.0.1:7700}
+# Smoke-test commander through the frontend's HTTP control API (no real input
+# needed). Prereq: daemon + frontend running (see test-weston.sh). The frontend
+# answers /key /text /click /band /state itself and forwards everything else to
+# the daemon, so one port drives both. COMMANDER_UI_HTTP, default:
+A=${A:-http://127.0.0.1:7701}
 set -e
 
 echo "== reset check (state):"
 curl -sf $A/state | head -c 200; echo
 
-echo "== place two bases and link them:"
+echo "== place two bases and link them (forwarded to the daemon):"
 curl -sf "$A/place?x=900&y=600&name=albion"; echo
 curl -sf "$A/place?x=1500&y=950&name=homelab"; echo
 curl -sf "$A/link?a=0&b=1"; echo

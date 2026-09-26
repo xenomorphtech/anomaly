@@ -1,33 +1,24 @@
-use eframe::egui::Color32;
 use serde::{Deserialize, Serialize};
 
 pub const WW: f32 = 12000.0;
 pub const WH: f32 = 8000.0;
 pub const BASE_W: f32 = 360.0;
+/// building icons on the strategy_building.jpeg sheet (3 rows x 8 cols)
+pub const ICON_COUNT: usize = 24;
 
-/// serialize Color32 as [r, g, b]
-pub mod color_rgb {
-    use eframe::egui::Color32;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-    pub fn serialize<S: Serializer>(c: &Color32, s: S) -> Result<S::Ok, S::Error> {
-        [c.r(), c.g(), c.b()].serialize(s)
-    }
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Color32, D::Error> {
-        let [r, g, b] = <[u8; 3]>::deserialize(d)?;
-        Ok(Color32::from_rgb(r, g, b))
-    }
-}
+/// an sRGB colour, serialized as [r, g, b]
+pub type Rgb = [u8; 3];
 
 // color rotation for newly established bases
-pub const PROJ_COLORS: [Color32; 8] = [
-    Color32::from_rgb(0xe0, 0xa4, 0x58),
-    Color32::from_rgb(0x6f, 0xb3, 0xd2),
-    Color32::from_rgb(0xb5, 0x8e, 0xe0),
-    Color32::from_rgb(0x7f, 0xc9, 0x8a),
-    Color32::from_rgb(0xd2, 0x6f, 0x8e),
-    Color32::from_rgb(0x8e, 0xd2, 0xc9),
-    Color32::from_rgb(0xd2, 0xc9, 0x6f),
-    Color32::from_rgb(0x9a, 0xa4, 0xe0),
+pub const PROJ_COLORS: [Rgb; 8] = [
+    [0xe0, 0xa4, 0x58],
+    [0x6f, 0xb3, 0xd2],
+    [0xb5, 0x8e, 0xe0],
+    [0x7f, 0xc9, 0x8a],
+    [0xd2, 0x6f, 0x8e],
+    [0x8e, 0xd2, 0xc9],
+    [0xd2, 0xc9, 0x6f],
+    [0x9a, 0xa4, 0xe0],
 ];
 
 /// current local time as a continuous minute counter (display wraps mod 1440)
@@ -38,7 +29,7 @@ pub fn now_min() -> f64 {
     (now.timestamp() as f64 + offset_s) / 60.0
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AgentState {
     Working,
@@ -68,8 +59,12 @@ impl AgentState {
 pub struct Agent {
     pub id: String,
     pub state: AgentState,
-    /// pylon title the unit is assigned to
+    /// title of the structure the unit is assigned to (pylon title, or the
+    /// question text when `sensor`)
     pub task: String,
+    /// the assignment is a sensor array (research question), not a pylon
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub sensor: bool,
     pub last_report: String,
     pub blocked_on: Option<String>,
     /// codex thread id — follow-up orders resume it so context carries over
@@ -83,12 +78,35 @@ pub struct Agent {
     pub turns: u32,
     #[serde(default, skip_serializing_if = "is_zero_i64")]
     pub tokens: i64,
+    /// reasoning effort the unit was dispatched with; follow-ups reuse it
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
 }
 
+/// codex `model_reasoning_effort` levels, low → high (the set the responses
+/// API enumerates; not every model accepts every level)
+pub const EFFORTS: [&str; 7] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/// parse an effort override: "" clears (Some(None)), a known level sets it,
+/// anything else is rejected (None)
+pub fn parse_effort(s: &str) -> Option<Option<String>> {
+    let s = s.trim().to_ascii_lowercase();
+    if s.is_empty() || s == "default" {
+        return Some(None);
+    }
+    EFFORTS.contains(&s.as_str()).then_some(Some(s))
+}
+
+fn is_false(v: &bool) -> bool {
+    !*v
+}
 fn is_zero_u32(v: &u32) -> bool {
     *v == 0
 }
 fn is_zero_i64(v: &i64) -> bool {
+    *v == 0
+}
+fn is_zero_u64(v: &u64) -> bool {
     *v == 0
 }
 
@@ -98,19 +116,21 @@ impl Agent {
             id,
             state: AgentState::Idle,
             task: String::new(),
+            sensor: false,
             last_report: String::new(),
             blocked_on: None,
             thread_id: None,
             last_msg: String::new(),
             turns: 0,
             tokens: 0,
+            effort: None,
         }
     }
 }
 
 // all states are constructible by a future data source, even if unused today
 #[allow(dead_code)]
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskState {
     Done,
@@ -150,6 +170,13 @@ pub struct Task {
     /// world-space pylon anchor; None = auto slot in the ring around the base
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pos: Option<(f32, f32)>,
+    /// codex reasoning effort for units sent here (None = base default)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    /// a unit reported DONE here and the commander has not opened the room
+    /// since — the pylon pulses on the map until it is read
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub unread: bool,
 }
 
 /// an open question / research thread anchored to a building (sensor array)
@@ -165,10 +192,13 @@ pub struct Question {
     /// world-space anchor; None = auto slot in the arc around the base
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pos: Option<(f32, f32)>,
+    /// codex reasoning effort for scouts sent here (None = base default)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
 }
 
 /// a wasm program installed in a building (spacetimedb-style module + budgets)
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ModuleCfg {
     pub name: String,
     /// path to a .wasm or .wat file, relative to the working directory
@@ -221,9 +251,12 @@ fn d_true() -> bool {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Project {
+    /// stable identity across index shifts (a destroyed base renumbers the
+    /// rest); 0 in old records — the engine assigns one on load
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub id: u64,
     pub name: String,
-    #[serde(with = "color_rgb")]
-    pub color: Color32,
+    pub color: Rgb,
     pub icon: usize, // index into the strategy_building.jpeg icon sheet
     pub status: String,
     pub goal: String,
@@ -245,6 +278,10 @@ pub struct Project {
     /// codex model override for units (None = ~/.codex/config.toml default)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// base-wide reasoning effort; a pylon/sensor array's own setting wins
+    /// (None = ~/.codex/config.toml model_reasoning_effort)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -280,6 +317,7 @@ pub struct Event {
     pub text: String,
 }
 
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct World {
     pub projects: Vec<Project>,
     pub decisions: Vec<Decision>,
@@ -326,14 +364,14 @@ impl Tier {
     }
 }
 
-/// per-project runtime state (staleness, deltas, resume snapshot)
+/// per-project staleness state kept by the engine: when the commander last
+/// looked at the base and what happened since. (What a frontend chose to show
+/// on its last visit is that frontend's own business.)
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Rt {
     pub last_visit_min: f64, // absolute minute of last visit
     pub delta: Vec<String>,  // events accumulated while away
     pub unseen_events: u32,
-    pub shown: Vec<String>, // resume snapshot rendered in the card
-    pub shown_age_min: f64,
-    pub shown_age: String,
 }
 
 pub fn initial_world() -> World {
@@ -347,14 +385,7 @@ pub fn initial_world() -> World {
 }
 
 pub fn new_rt(now: f64) -> Rt {
-    Rt {
-        last_visit_min: now,
-        delta: vec![],
-        unseen_events: 0,
-        shown: vec![],
-        shown_age_min: 0.0,
-        shown_age: String::new(),
-    }
+    Rt { last_visit_min: now, delta: vec![], unseen_events: 0 }
 }
 
 pub fn initial_rt(world: &World) -> Vec<Rt> {

@@ -1,0 +1,20 @@
+[package]
+name = "commander-core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[features]
+default = ["host"]
+# the backend half: wasm module host, codex worker host, usage poller, engine
+host = ["dep:wasmtime", "dep:ureq", "dep:libc"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = "0.4"
+wasmtime = { version = "45", optional = true }
+ureq = { workspace = true, optional = true }
+libc = { workspace = true, optional = true }

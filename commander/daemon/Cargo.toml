@@ -1,0 +1,14 @@
+[package]
+name = "commanderd"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "commanderd"
+path = "src/main.rs"
+
+[dependencies]
+commander-core = { path = "../core" }
+serde_json = { workspace = true }
+tiny_http = { workspace = true }
+libc = { workspace = true }

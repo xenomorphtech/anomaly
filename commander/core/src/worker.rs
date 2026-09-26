@@ -1,9 +1,9 @@
 //! Codex workers — the units that do real work.
 //!
 //! A worker is a `codex exec --json` process bound to one unit in one base.
-//! The app dispatches a pylon (task) to a unit; this host spawns codex inside
+//! The engine dispatches a pylon (task) to a unit; this host spawns codex inside
 //! the base's repo, tails its JSONL event stream on a reader thread and hands
-//! parsed events back to the app thread through a channel. A follow-up order
+//! parsed events back to the engine through a channel. A follow-up order
 //! resumes the unit's codex thread (`codex exec resume <id>`) so the unit keeps
 //! its context between turns.
 //!
@@ -27,6 +27,8 @@ pub struct Job {
     /// codex sandbox: read-only | workspace-write | danger-full-access
     pub sandbox: String,
     pub model: Option<String>,
+    /// codex model_reasoning_effort override: minimal|low|medium|high|xhigh
+    pub effort: Option<String>,
     pub prompt: String,
     /// codex thread id to resume (None = fresh thread)
     pub resume: Option<String>,
@@ -78,6 +80,11 @@ impl Host {
         self.procs.len()
     }
 
+    /// every (base, unit) with a turn in flight
+    pub fn running_keys(&self) -> Vec<(String, String)> {
+        self.procs.keys().cloned().collect()
+    }
+
     /// launch one turn; errors if the unit is already busy or codex can't start
     pub fn start(&mut self, job: Job) -> Result<(), String> {
         let key = (job.proj.clone(), job.agent.clone());
@@ -99,6 +106,9 @@ impl Host {
         }
         if let Some(m) = &job.model {
             cmd.arg("-m").arg(m);
+        }
+        if let Some(e) = &job.effort {
+            cmd.arg("-c").arg(format!("model_reasoning_effort=\"{}\"", e));
         }
         match &job.resume {
             Some(id) => {
@@ -271,15 +281,21 @@ pub fn verdict(msg: &str) -> Option<(Verdict, String)> {
     None
 }
 
-/// the standing orders every dispatched unit receives around its assignment
-pub fn prompt(agent: &str, base: &str, goal: &str, title: &str, notes: &str, extra: &str) -> String {
+/// the standing orders every dispatched unit receives around its assignment.
+/// `sensor` = the assignment is a sensor array (a research question to answer),
+/// not a pylon (a task to complete): the unit scouts and reports instead of
+/// changing the repo.
+/// `prior` is a previous unit's closing report (continuation): the new turn
+/// starts from that state instead of from scratch
+pub fn prompt(agent: &str, base: &str, goal: &str, title: &str, notes: &str, extra: &str, prior: &str, sensor: bool) -> String {
+    let kind = if sensor { "sensor array — a research question" } else { "pylon" };
     let mut s = format!(
         "You are unit {agent}, garrisoned at base \"{base}\" of the Commander HQ.\n\
          Base goal: {goal}\n\
-         Assignment (pylon): {title}\n"
+         Assignment ({kind}): {title}\n"
     );
     if !notes.trim().is_empty() {
-        // the pylon's room text: the title is only its name, this is the actual brief
+        // the structure's room text: the title is only its name, this is the actual brief
         s.push_str("Assignment brief:\n");
         s.push_str(notes.trim());
         s.push_str("\n");
@@ -289,14 +305,39 @@ pub fn prompt(agent: &str, base: &str, goal: &str, title: &str, notes: &str, ext
         s.push_str(extra.trim());
         s.push('\n');
     }
-    s.push_str(
-        "\nWork directly in this repository (your cwd). Keep going until the assignment is done \
-         or you hit a real blocker; do not ask questions you can answer by reading the code.\n\
-         End your final message with exactly one status line, alone on the last line:\n\
-         DONE: <one-line summary>      (assignment complete)\n\
-         BLOCKED: <what you need>      (you need a decision or input from the commander)\n\
-         PARTIAL: <what remains>       (progress made, more turns needed)\n",
-    );
+    if !prior.trim().is_empty() {
+        s.push_str(
+            "\nCONTINUATION. A previous unit already worked this assignment and closed with the \
+             report below. Do not redo what it reports as done: verify it briefly in the repo, then \
+             carry on from where it left off (address anything it left PARTIAL or unresolved, and \
+             anything the commander's notes ask for).\n\
+             --- previous report ---\n",
+        );
+        s.push_str(prior.trim());
+        s.push_str("\n--- end of previous report ---\n");
+    }
+    if sensor {
+        s.push_str(
+            "\nInvestigate this question in the repository (your cwd) and answer it. This is a \
+             scouting assignment: read, run and measure; do not change the codebase unless the \
+             question cannot be answered without it. Do not ask questions you can answer by \
+             reading the code. Your final message IS the answer: findings, the evidence \
+             (files, line numbers, commands, outputs) and the conclusion.\n\
+             End your final message with exactly one status line, alone on the last line:\n\
+             DONE: <one-line answer>       (question answered — the sensor array resolves)\n\
+             BLOCKED: <what you need>      (you need a decision or input from the commander)\n\
+             PARTIAL: <what remains>       (progress made, more turns needed)\n",
+        );
+    } else {
+        s.push_str(
+            "\nWork directly in this repository (your cwd). Keep going until the assignment is done \
+             or you hit a real blocker; do not ask questions you can answer by reading the code.\n\
+             End your final message with exactly one status line, alone on the last line:\n\
+             DONE: <one-line summary>      (assignment complete)\n\
+             BLOCKED: <what you need>      (you need a decision or input from the commander)\n\
+             PARTIAL: <what remains>       (progress made, more turns needed)\n",
+        );
+    }
     s
 }
 

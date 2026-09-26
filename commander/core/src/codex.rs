@@ -8,14 +8,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-#[derive(Clone)]
-pub struct Usage {
-    pub pct_left: f32,
-    pub resets_at: i64, // unix seconds
-    pub window_minutes: i64,
-    /// mtime of the rollout the numbers came from (unix seconds) — staleness
-    pub read_from: i64,
-}
+pub use crate::proto::Usage;
 
 pub type Shared = Arc<Mutex<Option<Usage>>>;
 

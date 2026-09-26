@@ -18,7 +18,7 @@
 //!
 //! Budgets are enforced per tick: wasmtime fuel (out-of-fuel traps the tick),
 //! an http call counter, and a response size cap. Modules run on a dedicated
-//! thread; the app thread syncs building snapshots in and drains outputs
+//! thread; the engine syncs building snapshots in and drains outputs
 //! (signals / reducer commands / run reports) back out. Edited module files
 //! hot-reload on the next tick (mtime watch).
 
@@ -27,14 +27,14 @@ use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant, SystemTime};
 
-/// per-building snapshot pushed from the app thread
+/// per-building snapshot pushed from the engine
 pub struct Building {
     pub name: String,
     pub state_json: String,
     pub modules: Vec<ModuleCfg>,
 }
 
-/// outputs flowing back to the app thread
+/// outputs flowing back to the engine
 pub enum Out {
     Signal { proj: String, module: String, text: String },
     Reduce { proj: String, module: String, cmd: serde_json::Value },
@@ -42,16 +42,7 @@ pub enum Out {
     Ran { proj: String, module: String, fuel_used: u64, http_used: u32, ms: f64, error: Option<String> },
 }
 
-/// last-run report the app keeps per (building, module) for the UI
-#[derive(Clone, Default)]
-pub struct ModStatus {
-    pub ticks: u64,
-    pub fuel_used: u64,
-    pub http_used: u32,
-    pub ms: f64,
-    pub error: Option<String>,
-    pub last_log: Option<String>,
-}
+pub use crate::proto::ModStatus;
 
 pub struct Host {
     tx: Sender<Vec<Building>>,

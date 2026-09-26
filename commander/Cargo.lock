@@ -695,15 +695,35 @@ name = "commander"
 version = "0.1.0"
 dependencies = [
  "arboard",
- "chrono",
+ "commander-core",
  "eframe",
  "image",
- "libc",
  "serde",
  "serde_json",
  "tiny_http",
  "ureq",
+]
+
+[[package]]
+name = "commander-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "libc",
+ "serde",
+ "serde_json",
+ "ureq",
  "wasmtime",
+]
+
+[[package]]
+name = "commanderd"
+version = "0.1.0"
+dependencies = [
+ "commander-core",
+ "libc",
+ "serde_json",
+ "tiny_http",
 ]
 
 [[package]]

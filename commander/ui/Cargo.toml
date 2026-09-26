@@ -1,0 +1,19 @@
+[package]
+name = "commander"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "commander"
+path = "src/main.rs"
+
+[dependencies]
+commander-core = { path = "../core", default-features = false }
+eframe = "0.32"
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tiny_http = { workspace = true }
+ureq = { workspace = true }
+# host (X11) clipboard: the nested weston has its own, isolated clipboard
+arboard = { version = "3", default-features = false }
